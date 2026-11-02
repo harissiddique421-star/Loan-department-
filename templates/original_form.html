@@ -1,35 +1,63 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tooba Foundation Loan Form</title>
-<style>
-body{font-family:Arial,sans-serif;background:#f4f6f9;margin:0;padding:20px;color:#17243a}.wrap{max-width:900px;margin:auto;background:#fff;padding:24px;border-radius:12px}h1{color:#164d8d}h2{border-bottom:1px solid #ddd;padding-bottom:8px;margin-top:28px}.notice{background:#eaf4ff;padding:12px;border-radius:8px}label{display:block;margin:12px 0 4px;font-weight:600}input,textarea,select{width:100%;padding:10px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:6px}textarea{min-height:70px}button{margin-top:20px;background:#164d8d;color:white;border:0;border-radius:7px;padding:12px 22px;font-size:16px;cursor:pointer}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:600px){.grid{grid-template-columns:1fr}}.flash{background:#fff4d6;padding:10px;border-radius:6px}
-</style></head><body><main class="wrap">
-<h1>Tooba Foundation — Loan Application</h1>
-<p class="notice">Application ID: <strong>{{ a.app_id }}</strong> · Applicant: {{ a.applicant_name or "New applicant" }}. Form data is saved to this application record.</p>
-{% with messages=get_flashed_messages() %}{% if messages %}{% for message in messages %}<p class="flash">{{ message }}</p>{% endfor %}{% endif %}{% endwith %}
-<form method="post">
-<h2>Applicant Information</h2><div class="grid">
-<div><label>Full Name *</label><input name="full_name" required value="{{ data.get('full_name',a.applicant_name or '') }}"></div>
-<div><label>CNIC</label><input name="cnic" value="{{ data.get('cnic',a.cnic or '') }}" placeholder="XXXXX-XXXXXXX-X"></div>
-<div><label>Contact Number</label><input name="phone" value="{{ data.get('phone','') }}"></div>
-<div><label>Alternate Contact</label><input name="alternate_phone" value="{{ data.get('alternate_phone','') }}"></div>
-</div><label>Address</label><textarea name="address">{{ data.get('address','') }}</textarea>
-<label>City / Area</label><input name="city" value="{{ data.get('city','') }}">
-<h2>Loan Information</h2><div class="grid">
-<div><label>Requested Amount (PKR)</label><input type="number" min="0" step="1" name="amount" value="{{ data.get('amount','') }}"></div>
-<div><label>Loan Duration (months)</label><input type="number" min="1" name="duration_months" value="{{ data.get('duration_months','') }}"></div>
-</div><label>Loan Purpose</label><textarea name="purpose">{{ data.get('purpose','') }}</textarea>
-<h2>Income / Employment</h2><div class="grid">
-<div><label>Occupation</label><input name="occupation" value="{{ data.get('occupation','') }}"></div>
-<div><label>Monthly Income (PKR)</label><input type="number" min="0" name="monthly_income" value="{{ data.get('monthly_income','') }}"></div>
-<div><label>Employer / Business</label><input name="employer" value="{{ data.get('employer','') }}"></div>
-<div><label>Employment Duration</label><input name="employment_duration" value="{{ data.get('employment_duration','') }}"></div>
-</div><label>Income / Repayment Details</label><textarea name="income_details">{{ data.get('income_details','') }}</textarea>
-<h2>Guarantor</h2><div class="grid">
-<div><label>Guarantor Name</label><input name="guarantor_name" value="{{ data.get('guarantor_name','') }}"></div>
-<div><label>Guarantor CNIC</label><input name="guarantor_cnic" value="{{ data.get('guarantor_cnic','') }}"></div>
-<div><label>Guarantor Contact</label><input name="guarantor_phone" value="{{ data.get('guarantor_phone','') }}"></div>
-<div><label>Relationship</label><input name="guarantor_relationship" value="{{ data.get('guarantor_relationship','') }}"></div>
-</div><label>Additional Notes</label><textarea name="notes">{{ data.get('notes','') }}</textarea>
-<button type="submit">Save Loan Form</button>
-</form><p><a href="{{ url_for('edit_application',app_id=a.id) }}">Back to application / documents</a></p>
-</main></body></html>
+{% extends "base.html" %}{% block title %}Edit {{ a.app_id }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='loanform.css') }}">{% endblock %}
+{% block content %}
+{% set v = payload['values'] %}
+<div class="lf">
+<form id="loanForm" class="panel no-print" method="post" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="row between">
+    <div>
+      <h1>TOOBA FOUNDATION — Loan Form · {{ a.app_id }}</h1>
+      <div class="note">Fill the information below once. Each entry is placed in front of its own label on the form, and CNIC goes digit-by-digit into the 13 boxes. Page 2 takes the guarantor photos (signatures and thumb impressions are put by hand after printing); page 3 takes the loan details. <b>"Save Form" dabayein</b> — phir koi bhi staff isay khol kar edit ya print kar sakta hai.</div>
+    </div>
+    <div style="min-width:170px"><label>Status</label>
+      <select name="status">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select></div>
+  </div>
+  <div class="grid">
+  {% for title, fields in FORM_SECTIONS %}
+    {% set parts = title.split(' — ') %}
+    <div class="sec">{{ parts[0] }}{% if parts|length > 1 %} <small>— {{ parts[1] }}</small>{% endif %}</div>
+    {% for name, label, kind in fields %}
+    <div {% if kind == 'row' %}class="full"{% endif %}><label for="{{ name }}">{{ label }}</label>
+      <input id="{{ name }}" name="{{ name }}" value="{{ v.get(name, '') }}" autocomplete="off"
+        {% if kind in ('num', 'phone', 'cnic') %}inputmode="numeric"{% endif %}
+        {% if kind == 'phone' %}maxlength="11" placeholder="03XXXXXXXXX"{% endif %}
+        {% if kind == 'cnic' %}maxlength="13" placeholder="3520112345671"{% endif %}
+        {% if kind == 'row' %}dir="auto"{% endif %}
+        {% if name == 'name' %}required{% endif %}>
+    </div>
+    {% endfor %}
+    {% if loop.index == 3 %}
+    {% for page, slot_title, slot_note in [(1, 'Applicant Photo', 'Page 1'), (2, 'Guarantor Photos (ضمانتی کی تصویر)', 'Page 2 · signature & thumb are put by hand after printing')] %}
+    <div class="sec">{{ slot_title }} <small>— {{ slot_note }}</small></div>
+    <div class="uploads">
+      {% for kind, en, ur, pg in PHOTO_SLOTS if pg == page %}
+      <div class="upl" id="card_{{ kind }}">
+        <div class="ttl">{{ en }}<span>{{ ur }}</span></div>
+        <div class="thumb" id="thumb_{{ kind }}">No image</div>
+        <div class="btns">
+          <label class="pick">Upload<input type="file" accept="image/*" id="file_{{ kind }}" data-photo="{{ kind }}"></label>
+          <button type="button" class="rm" title="Remove" data-action="remove" data-id="{{ kind }}">✕</button>
+        </div>
+        <input type="hidden" name="remove_{{ kind }}" value="0">
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% endif %}
+  {% endfor %}
+    <div class="sec">Other Documents <small>— CNIC copies, bills, etc. (not printed on the form)</small></div>
+    <div class="full"><input type="file" name="documents" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"></div>
+  </div>
+  <div class="actions">
+    <button type="submit" class="primary">💾 Save Form</button>
+    <button type="button" class="primary" data-action="pdf">Download PDF (3 pages)</button>
+    <button type="button" class="primary" data-action="print">Print</button>
+    <button type="button" class="secondary" data-action="clear">Clear</button>
+    <a class="secondary" href="{{ url_for('view_application', app_id=a.id) }}">Cancel</a>
+  </div>
+  <div id="msg" style="font-size:13px"></div>
+</form>
+{% include "_form_pages.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,46 @@
+/* 3-page Tooba loan form (adapted from Tooba_Loan_Form_3_Pages.html). */
+.lf .panel{background:#fff;border-radius:14px;padding:16px;box-shadow:0 3px 16px #0001;margin-bottom:14px}
+.lf h1{font-size:20px;margin:0 0 6px}
+.lf .note{font-size:13px;color:#555;margin-bottom:14px}
+.lf .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.lf .sec{grid-column:1/-1;font-size:14px;font-weight:700;color:#126b2d;border-bottom:1px solid #dfe6df;padding:8px 0 4px;margin-top:4px}
+.lf .sec small{font-weight:400;color:#666}
+.lf label{font-size:12px;font-weight:700;display:block;margin:0 0 4px}
+.lf input,.lf select{width:100%;padding:9px;border:1px solid #bbb;border-radius:7px;font-size:14px}
+.lf input:focus{outline:2px solid #6aa66a}
+.lf .full{grid-column:1/-1}
+.lf .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;position:sticky;bottom:0;background:#fff;padding:10px 0}
+.lf .actions button,.lf .actions a{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;font-size:14px;text-decoration:none;display:inline-block}
+.lf .primary{background:#126b2d;color:#fff}
+.lf .primary:disabled{opacity:.6;cursor:wait}
+.lf .secondary{background:#e9ecef;color:#222}
+.lf .uploads{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.lf .upl{border:1px dashed #9bb59b;border-radius:10px;padding:8px;background:#f7faf7;display:flex;flex-direction:column;gap:6px}
+.lf .upl .ttl{font-size:12px;font-weight:700;line-height:1.3}
+.lf .upl .ttl span{display:block;font-weight:400;color:#555}
+.lf .upl .thumb{height:74px;border-radius:6px;background:#fff;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:11px;color:#999}
+.lf .upl .thumb img{max-width:100%;max-height:100%;object-fit:contain}
+.lf .upl .btns{display:flex;gap:6px}
+.lf .upl .pick{flex:1;text-align:center;background:#126b2d;color:#fff;border-radius:7px;padding:7px 6px;font-size:12px;font-weight:700;cursor:pointer;margin:0}
+.lf .upl .pick input{display:none}
+.lf .upl .rm{background:#f1d6d6;color:#8a1c1c;padding:7px 9px;font-size:12px;display:none;border:0;border-radius:7px;cursor:pointer}
+.lf .upl.has .rm{display:block}
+.lf .upl.has{border-style:solid;border-color:#126b2d}
+.lf .pageTag{text-align:center;font-size:12px;font-weight:700;color:#555;margin:18px 0 6px}
+.lf .preview{position:relative;width:min(100%,794px);aspect-ratio:1241/1755;margin:0 auto;background:#fff;container-type:inline-size;overflow:hidden;box-shadow:0 3px 16px #0002}
+.lf .preview>img.bg{display:block;width:100%;height:100%;object-fit:fill}
+.lf .field{position:absolute;display:flex;justify-content:center;white-space:nowrap;overflow:visible;font-family:'Bookman Old Style','Bookman','URW Bookman','URW Bookman L',Georgia,'Jameel Noori Nastaleeq','Noto Nastaliq Urdu',serif;font-weight:700;color:#111;line-height:1}
+.lf .field.line{align-items:flex-end}
+.lf .field.box{align-items:center}
+.lf .field>span{display:block;white-space:nowrap;line-height:1.15}
+.lf .digit{position:absolute;display:flex;align-items:center;justify-content:center;font-family:'Bookman Old Style','Bookman','URW Bookman',Georgia,serif;font-weight:700;color:#111;line-height:1}
+.lf .pic{position:absolute;overflow:hidden;display:none}
+.lf .pic img{display:block;width:100%;height:100%;object-fit:cover}
+@media (max-width:650px){.lf .grid{grid-template-columns:1fr}.lf .preview{width:100%}}
+@media print{
+  @page{size:A4 portrait;margin:0}
+  html,body{background:#fff;margin:0}
+  .container{padding:0!important;max-width:none!important;margin:0!important}
+  .lf .preview{width:210mm;height:297mm;margin:0;box-shadow:none;break-after:page;page-break-after:always}
+  .lf .preview.last{break-after:auto;page-break-after:auto}
+}

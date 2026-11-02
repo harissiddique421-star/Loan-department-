@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block title %}{{ a.app_id }} — {{ a.applicant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='loanform.css') }}">{% endblock %}
+{% block content %}
+<div class="lf">
+  <div class="panel no-print">
+    <h1>{{ a.app_id }} — {{ a.applicant_name or 'New applicant' }}</h1>
+    <div class="actions" style="position:static">
+      <button type="button" class="primary" data-action="print">🖨 Print</button>
+      <button type="button" class="primary" data-action="pdf">Download PDF (3 pages)</button>
+      <a class="secondary" href="{{ url_for('loan_form', app_id=a.id) }}">✎ Edit</a>
+      <a class="secondary" href="{{ url_for('view_application', app_id=a.id) }}">Back</a>
+    </div>
+    <div id="msg" style="font-size:13px"></div>
+  </div>
+  {% include "_form_pages.html" %}
+</div>
+{% endblock %}

@@ -1,1 +1,24 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial;padding:15px;background:#f3f6fb}.box{background:white;padding:20px;border-radius:12px;max-width:900px;margin:auto}input,select{padding:10px;margin:5px}.btn{background:#1459a6;color:white;padding:10px;border:0}</style></head><body><div class="box"><h2>User Management (Admin)</h2>{% for m in get_flashed_messages() %}<p>{{m}}</p>{% endfor %}<form method="post"><input name="username" placeholder="Username" required><input name="password" placeholder="Password (12+ chars)" required><select name="role"><option>Staff</option><option>Admin</option></select><button class="btn">Add user</button></form><h3>Users</h3><ul>{% for u in users %}<li>{{u.username}} — {{u.role}} — {{'Active' if u.active else 'Disabled'}} {% if u.id!=current_user.id %}<form style="display:inline" method="post" action="/admin/users/{{u.id}}/toggle"><button>{{'Disable' if u.active else 'Enable'}}</button></form>{% endif %}</li>{% endfor %}</ul><a href="/">Dashboard</a></div></body></html>
+{% extends "base.html" %}{% block title %}Users{% endblock %}
+{% block content %}
+<h1>Users (login accounts)</h1>
+<form class="card" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <h2>Naya user banayein</h2>
+  <div class="grid">
+    <div><label>Username</label><input name="username" required autocomplete="off"></div>
+    <div><label>Password (8+ characters)</label><input name="password" minlength="8" required autocomplete="new-password"></div>
+    <div><label>Role</label><select name="role"><option value="Staff">Staff — forms dekh/edit/print kar sakta hai</option><option value="Admin">Admin — upar wala sab + users, reports, export, delete</option></select></div>
+  </div>
+  <p><button class="btn">Add user</button></p>
+</form>
+<div class="card overflow"><table>
+  <tr><th>Username</th><th>Role</th><th>Status</th><th>Reset password</th><th></th></tr>
+  {% for u in users %}
+  <tr>
+    <td><b>{{ u.username }}</b></td><td>{{ u.role }}</td><td>{{ 'Active' if u.active else 'Disabled' }}</td>
+    <td><form class="row" method="post" action="{{ url_for('reset_password', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="password" placeholder="Naya password" minlength="8" required style="width:160px" autocomplete="new-password"><button class="btn small light">Set</button></form></td>
+    <td>{% if u.id != current_user.id %}<form method="post" action="{{ url_for('toggle_user', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small {{ 'danger' if u.active else '' }}">{{ 'Disable' if u.active else 'Enable' }}</button></form>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% endblock %}

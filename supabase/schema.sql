@@ -16,6 +16,7 @@ create table if not exists public.application (
   assigned_to bigint references public."user"(id),
   form_json text default '{}',
   created_by bigint references public."user"(id),
+  updated_by bigint references public."user"(id),
   created_at timestamp,
   updated_at timestamp
 );
@@ -26,6 +27,11 @@ create table if not exists public.document (
   application_id bigint references public.application(id) not null,
   original_name varchar(255),
   stored_name varchar(255) unique,
+  kind varchar(20) default 'document',
+  content_type varchar(120) default 'application/octet-stream',
+  size integer default 0,
+  storage varchar(20) default 'db',
+  data bytea,
   uploaded_by bigint references public."user"(id),
   created_at timestamp
 );
@@ -36,3 +42,9 @@ create table if not exists public.log (
   application_id bigint,
   created_at timestamp
 );
+-- The app adds any missing columns automatically on startup, so running this file is optional.
+-- The Flask server connects with the database password; keep the browser away from these tables:
+alter table public."user" enable row level security;
+alter table public.application enable row level security;
+alter table public.document enable row level security;
+alter table public.log enable row level security;

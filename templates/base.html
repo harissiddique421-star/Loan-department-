@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}Tooba Foundation{% endblock %} · Loan Department</title>
+<link rel="icon" href="{{ url_for('static', filename='tooba-logo.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<script src="{{ url_for('static', filename='app.js') }}" defer></script>
+{% block head %}{% endblock %}
+</head>
+<body>
+{% if current_user.is_authenticated %}
+<header class="topbar no-print">
+  <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.svg') }}" alt=""><span>Tooba Foundation<small>Loan Department</small></span></a>
+  <nav>
+    <a href="{{ url_for('dashboard') }}">Applications</a>
+    {% if current_user.role == 'Admin' %}
+    <a href="{{ url_for('users') }}">Users</a>
+    <a href="{{ url_for('reports') }}">Reports</a>
+    {% endif %}
+    <a href="{{ url_for('change_password') }}">{{ current_user.username }}</a>
+    <form method="post" action="{{ url_for('logout') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="linkbtn">Logout</button></form>
+  </nav>
+</header>
+{% endif %}
+<main class="container">
+  {% if USING_SQLITE and ON_VERCEL and current_user.is_authenticated %}
+  <p class="flash warn no-print">⚠ DATABASE_URL set nahi hai — data temporary hai aur delete ho jayega. Vercel settings mein Supabase DATABASE_URL lagayein.</p>
+  {% endif %}
+  {% for m in get_flashed_messages() %}<p class="flash no-print">{{ m }}</p>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

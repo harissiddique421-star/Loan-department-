@@ -1,1 +1,7 @@
-<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial;background:#f2f5fa;padding:18px}.box{background:white;padding:20px;border-radius:12px;margin:12px auto;max-width:900px}table{width:100%;border-collapse:collapse}td,th{padding:10px;text-align:left;border-bottom:1px solid #ddd}</style></head><body><div class="box"><h2>Reports & Analytics</h2><p>Total applications: <b>{{total}}</b></p><h3>Status summary</h3><table><tr><th>Status</th><th>Count</th></tr>{% for status,count in by_status %}<tr><td>{{status}}</td><td>{{count}}</td></tr>{% endfor %}</table><h3>Staff workload</h3><table><tr><th>Staff</th><th>Assigned applications</th></tr>{% for name,count in by_staff %}<tr><td>{{name}}</td><td>{{count}}</td></tr>{% endfor %}</table><p><a href="/">Back to dashboard</a></p></div></body></html>
+{% extends "base.html" %}{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="row between"><h1>Reports</h1><div class="row no-print"><a class="btn light" href="{{ url_for('export_csv') }}">Export CSV</a><button class="btn light" data-print>Print</button></div></div>
+<div class="card"><p>Total applications: <b>{{ total }}</b></p>
+<h2>Status</h2><table><tr><th>Status</th><th>Count</th></tr>{% for s, c in by_status %}<tr><td>{{ s }}</td><td>{{ c }}</td></tr>{% endfor %}</table>
+<h2 style="margin-top:20px">Assigned per user</h2><table><tr><th>User</th><th>Applications</th></tr>{% for n, c in by_staff %}<tr><td>{{ n }}</td><td>{{ c }}</td></tr>{% endfor %}</table></div>
+{% endblock %}
