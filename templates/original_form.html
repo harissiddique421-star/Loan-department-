@@ -1,57 +1,63 @@
 {% extends "base.html" %}{% block title %}Edit {{ a.app_id }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='loanform.css') }}">{% endblock %}
 {% block content %}
-{# Fields come from form_fields.py — add or change fields there. #}
-<form class="card" method="post" enctype="multipart/form-data">
+{% set v = payload['values'] %}
+<div class="lf">
+<form id="loanForm" class="panel no-print" method="post" enctype="multipart/form-data">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row between">
-    <div><h1>Loan Application — {{ a.app_id }}</h1>
-      <p class="muted">Har field database mein save hoti hai. Koi bhi staff baad mein khol kar edit kar sakta hai.</p></div>
-    <div style="min-width:180px"><label>Status</label>
+    <div>
+      <h1>TOOBA FOUNDATION — Loan Form · {{ a.app_id }}</h1>
+      <div class="note">Fill the information below once. Each entry is placed in front of its own label on the form, and CNIC goes digit-by-digit into the 13 boxes. Page 2 takes the guarantor photos (signatures and thumb impressions are put by hand after printing); page 3 takes the loan details. <b>"Save Form" dabayein</b> — phir koi bhi staff isay khol kar edit ya print kar sakta hai.</div>
+    </div>
+    <div style="min-width:170px"><label>Status</label>
       <select name="status">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select></div>
   </div>
-
-  <div class="formsec"><h2>Applicant Photo</h2>
-    <div class="row" style="align-items:flex-end;gap:16px">
-      <img id="photoPreview" class="photo" alt="Applicant photo"
-           src="{{ url_for('document', doc_id=a.photo.id, inline=1) if a.photo else url_for('static', filename='no-photo.svg') }}">
-      <div style="flex:1;min-width:220px">
-        <label>{{ 'Photo badlein' if a.photo else 'Photo upload karein' }} (JPG / PNG)</label>
-        <input type="file" name="applicant_photo" accept="image/jpeg,image/png,image/webp" capture="user" data-preview="photoPreview">
-      </div>
-    </div>
-  </div>
-
+  <div class="grid">
   {% for title, fields in FORM_SECTIONS %}
-  <div class="formsec"><h2>{{ title }}</h2>
-    <div class="grid">
-    {% for name, label, type in fields %}
-      {% set val = data.get(name, '') %}
-      <div {% if type == 'textarea' %}style="grid-column:1/-1"{% endif %}>
-        <label for="f_{{ name }}">{{ label }}</label>
-        {% if type == 'textarea' %}
-          <textarea id="f_{{ name }}" name="{{ name }}">{{ val }}</textarea>
-        {% elif type.startswith('select:') %}
-          <select id="f_{{ name }}" name="{{ name }}">{% for opt in type[7:].split(',') %}<option value="{{ opt }}" {{ 'selected' if val == opt }}>{{ opt or '— select —' }}</option>{% endfor %}</select>
-        {% else %}
-          <input id="f_{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ val }}"
-            {% if type == 'number' %}min="0" step="any"{% endif %}
-            {% if name == 'full_name' %}required{% endif %}
-            {% if 'cnic' in name %}placeholder="XXXXX-XXXXXXX-X"{% endif %}>
-        {% endif %}
-      </div>
-    {% endfor %}
+    {% set parts = title.split(' — ') %}
+    <div class="sec">{{ parts[0] }}{% if parts|length > 1 %} <small>— {{ parts[1] }}</small>{% endif %}</div>
+    {% for name, label, kind in fields %}
+    <div {% if kind == 'row' %}class="full"{% endif %}><label for="{{ name }}">{{ label }}</label>
+      <input id="{{ name }}" name="{{ name }}" value="{{ v.get(name, '') }}" autocomplete="off"
+        {% if kind in ('num', 'phone', 'cnic') %}inputmode="numeric"{% endif %}
+        {% if kind == 'phone' %}maxlength="11" placeholder="03XXXXXXXXX"{% endif %}
+        {% if kind == 'cnic' %}maxlength="13" placeholder="3520112345671"{% endif %}
+        {% if kind == 'row' %}dir="auto"{% endif %}
+        {% if name == 'name' %}required{% endif %}>
     </div>
-  </div>
+    {% endfor %}
+    {% if loop.index == 3 %}
+    {% for page, slot_title, slot_note in [(1, 'Applicant Photo', 'Page 1'), (2, 'Guarantor Photos (ضمانتی کی تصویر)', 'Page 2 · signature & thumb are put by hand after printing')] %}
+    <div class="sec">{{ slot_title }} <small>— {{ slot_note }}</small></div>
+    <div class="uploads">
+      {% for kind, en, ur, pg in PHOTO_SLOTS if pg == page %}
+      <div class="upl" id="card_{{ kind }}">
+        <div class="ttl">{{ en }}<span>{{ ur }}</span></div>
+        <div class="thumb" id="thumb_{{ kind }}">No image</div>
+        <div class="btns">
+          <label class="pick">Upload<input type="file" accept="image/*" id="file_{{ kind }}" data-photo="{{ kind }}"></label>
+          <button type="button" class="rm" title="Remove" data-action="remove" data-id="{{ kind }}">✕</button>
+        </div>
+        <input type="hidden" name="remove_{{ kind }}" value="0">
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    {% endif %}
   {% endfor %}
-
-  <div class="formsec"><h2>Documents (CNIC copy, bills, etc.)</h2>
-    <input type="file" name="documents" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
-    <p class="muted">Ek se zyada files ek saath chun sakte hain. Pehle se upload ki gayi files application page par hain.</p>
+    <div class="sec">Other Documents <small>— CNIC copies, bills, etc. (not printed on the form)</small></div>
+    <div class="full"><input type="file" name="documents" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"></div>
   </div>
-
-  <div class="sticky-save row">
-    <button class="btn">Save Form</button>
-    <a class="btn light" href="{{ url_for('view_application', app_id=a.id) }}">Cancel</a>
+  <div class="actions">
+    <button type="submit" class="primary">💾 Save Form</button>
+    <button type="button" class="primary" data-action="pdf">Download PDF (3 pages)</button>
+    <button type="button" class="primary" data-action="print">Print</button>
+    <button type="button" class="secondary" data-action="clear">Clear</button>
+    <a class="secondary" href="{{ url_for('view_application', app_id=a.id) }}">Cancel</a>
   </div>
+  <div id="msg" style="font-size:13px"></div>
 </form>
+{% include "_form_pages.html" %}
+</div>
 {% endblock %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}{% block title %}{{ a.app_id }}{% endblock %}
 {% block content %}
-{% set d = a.data %}
+{% set d = a.form_values %}
 <div class="row between">
   <h1>{{ a.app_id }} — {{ a.applicant_name or 'New applicant' }} <span class="badge {{ a.status }}">{{ a.status }}</span></h1>
   <div class="row">
@@ -13,10 +13,12 @@
   <div class="row" style="align-items:flex-start;gap:20px">
     <img class="photo" alt="Applicant photo" src="{{ url_for('document', doc_id=a.photo.id, inline=1) if a.photo else url_for('static', filename='no-photo.svg') }}">
     <dl class="kv" style="flex:1;min-width:240px">
+      <dt>Father / Husband</dt><dd>{{ d.get('father') or '—' }}</dd>
       <dt>CNIC</dt><dd>{{ d.get('cnic') or '—' }}</dd>
       <dt>Phone</dt><dd>{{ d.get('phone') or '—' }}</dd>
-      <dt>Requested amount</dt><dd>{{ ('PKR ' ~ d.get('amount')) if d.get('amount') else '—' }}</dd>
-      <dt>Purpose</dt><dd>{{ d.get('purpose') or '—' }}</dd>
+      <dt>Loan amount</dt><dd>{{ ('Rs. ' ~ d.get('amount')) if d.get('amount') else '—' }}</dd>
+      <dt>Monthly installment</dt><dd>{{ ('Rs. ' ~ d.get('qist')) if d.get('qist') else '—' }}</dd>
+      <dt>Business / Job</dt><dd>{{ d.get('business') or '—' }}</dd>
       <dt>Created</dt><dd>{{ a.created_at.strftime('%d-%m-%Y %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}</dd>
       <dt>Last updated</dt><dd>{{ a.updated_at.strftime('%d-%m-%Y %H:%M') if a.updated_at }}{% if a.updated_by %} by {{ names.get(a.updated_by, '?') }}{% endif %}</dd>
     </dl>
@@ -35,12 +37,20 @@
   </div>
 </div>
 
+<details class="card">
+  <summary><b>Poora form (saari details)</b></summary>
+  {% for title, fields in FORM_SECTIONS %}
+  <h3>{{ title }}</h3>
+  <dl class="kv">{% for name, label, kind in fields %}<dt>{{ label.rstrip(' *') }}</dt><dd>{{ d.get(name) or '—' }}</dd>{% endfor %}</dl>
+  {% endfor %}
+</details>
+
 <div class="card">
   <h2>Pictures &amp; Documents</h2>
   <form class="row" method="post" action="{{ url_for('upload', app_id=a.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="file" name="file" multiple required accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" style="flex:1;min-width:220px">
-    <select name="kind" style="width:auto"><option value="document">Document</option><option value="photo">Applicant photo</option></select>
+    <select name="kind" style="width:auto"><option value="document">Document</option>{% for kind, en, ur, pg in PHOTO_SLOTS %}<option value="{{ kind }}">{{ en }}</option>{% endfor %}</select>
     <button class="btn">Upload</button>
   </form>
   <ul class="files">
@@ -49,7 +59,7 @@
       <a href="{{ url_for('document', doc_id=doc.id, inline=1) }}" target="_blank">
         {% if doc.is_image %}<img src="{{ url_for('document', doc_id=doc.id, inline=1) }}" alt="">{% else %}<div class="fileicon">{{ doc.original_name.rsplit('.',1)[-1]|upper }}</div>{% endif %}
         {{ doc.original_name }}</a>
-      <div class="muted">{{ 'Photo · ' if doc.kind == 'photo' }}{{ (doc.size // 1024) if doc.size else '?' }} KB · {{ names.get(doc.uploaded_by, '?') }}</div>
+      <div class="muted">{{ (PHOTO_LABELS[doc.kind] ~ ' · ') if doc.kind in PHOTO_LABELS }}{{ (doc.size // 1024) if doc.size else '?' }} KB · {{ names.get(doc.uploaded_by, '?') }}</div>
       <div class="row" style="margin-top:6px">
         <a class="btn small light" href="{{ url_for('document', doc_id=doc.id) }}">Download</a>
         <form method="post" action="{{ url_for('delete_document', doc_id=doc.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" data-confirm="Ye file delete karein?">Delete</button></form>

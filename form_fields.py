@@ -1,51 +1,66 @@
-"""Loan form fields. Edit this list to add/remove/rename fields.
+"""Tooba Foundation 3-page loan form — field list.
 
-The form page, the print page and the CSV export all read from here, so a
-field added here appears everywhere automatically. Each field is:
-    (name, label, type)          type = text | number | date | textarea | select:A,B,C
-`name` is the key stored in the database — do not rename it after real data is saved.
+Each field is (name, label, kind). `name` must match the id used in
+static/loanform.js (FIELDS / CNICS), which says where on the scanned page the
+text is printed. Do not rename a `name` after real data has been saved.
+
+kind: text | num (digits keyboard) | phone (11 digits) | cnic (13 digits) | row (full width)
 """
 
 FORM_SECTIONS = [
-    ("Applicant Information", [
-        ("full_name", "Full Name *", "text"),
-        ("father_name", "Father / Husband Name", "text"),
-        ("cnic", "CNIC", "text"),
-        ("dob", "Date of Birth", "date"),
-        ("gender", "Gender", "select:,Male,Female"),
-        ("marital_status", "Marital Status", "select:,Single,Married,Widowed,Divorced"),
-        ("phone", "Contact Number", "text"),
-        ("alternate_phone", "Alternate Contact", "text"),
-        ("address", "Address", "textarea"),
-        ("city", "City / Area", "text"),
+    ("Applicant — Page 1", [
+        ("amount", "Loan Amount (قرضہ)", "num"),
+        ("name", "Name (نام) *", "text"),
+        ("father", "Father / Husband Name (ولدیت/شوہر کا نام)", "text"),
+        ("cnic", "CNIC (13 digits)", "cnic"),
+        ("phone", "Phone No. (فون نمبر)", "phone"),
+        ("familyPhone", "Family Phone No. (فیملی فون نمبر)", "phone"),
+        ("qist", "Monthly Installment (ہر ماہ قسط)", "num"),
+        ("address", "Permanent Address (پتہ)", "text"),
+        ("business", "Business / Job (کاروبار/ملازمت)", "text"),
+        ("businessAddress", "Business Address (کاروبار کا پتہ)", "text"),
+        ("income", "Monthly Income (کل آمدن)", "num"),
+        ("installment", "Mutawaka Amdan (متوقع آمدن)", "num"),
+        ("eduExpense", "Educational Expenses (تعلیمی اخراجات)", "num"),
+        ("jobFamily", "Earning Persons in Family (کمانے والے افراد)", "num"),
+        ("expenses", "Total Expenses (کل اخراجات)", "num"),
+        ("family", "Family Members (گھر کے افراد)", "num"),
+        ("houseEdu", "Education (تعلیم)", "text"),
+        ("relative1", "Nearest Masjid (قریب ترین مسجد)", "text"),
+        ("relative2", "Nearest Shop (قریب ترین دکان)", "text"),
     ]),
-    ("Loan Information", [
-        ("amount", "Requested Amount (PKR)", "number"),
-        ("duration_months", "Loan Duration (months)", "number"),
-        ("purpose", "Loan Purpose", "textarea"),
+    ("Guarantor 1 (ضمانتی نمبر 1) — Page 1", [
+        ("g1name", "Name", "text"),
+        ("g1father", "Father Name", "text"),
+        ("g1cnic", "CNIC (13 digits)", "cnic"),
+        ("g1phone", "Phone", "phone"),
+        ("g1address", "Address", "text"),
+        ("g1business", "Business / Job (پیشہ)", "text"),
     ]),
-    ("Income / Employment", [
-        ("occupation", "Occupation", "text"),
-        ("monthly_income", "Monthly Income (PKR)", "number"),
-        ("employer", "Employer / Business", "text"),
-        ("employment_duration", "Employment Duration", "text"),
-        ("family_members", "Family Members", "number"),
-        ("monthly_expenses", "Monthly Expenses (PKR)", "number"),
-        ("income_details", "Income / Repayment Details", "textarea"),
+    ("Guarantor 2 (ضمانتی نمبر 2) — Page 1", [
+        ("g2name", "Name", "text"),
+        ("g2father", "Father Name", "text"),
+        ("g2cnic", "CNIC (13 digits)", "cnic"),
+        ("g2phone", "Phone", "phone"),
+        ("g2address", "Address", "text"),
+        ("g2business", "Business / Job (پیشہ)", "text"),
     ]),
-    ("Guarantor", [
-        ("guarantor_name", "Guarantor Name", "text"),
-        ("guarantor_cnic", "Guarantor CNIC", "text"),
-        ("guarantor_phone", "Guarantor Contact", "text"),
-        ("guarantor_relationship", "Relationship", "text"),
-        ("guarantor_address", "Guarantor Address", "textarea"),
-    ]),
-    ("Office Use", [
-        ("verified_by", "Verified By", "text"),
-        ("verification_date", "Verification Date", "date"),
-        ("approved_amount", "Approved Amount (PKR)", "number"),
-        ("notes", "Additional Notes / Remarks", "textarea"),
+    ("Loan Details (قرضے کی تفصیل) — Page 3", [
+        ("detail1", "Row 1", "row"),
+        ("detail2", "Row 2", "row"),
+        ("detail3", "Row 3", "row"),
+        ("detail4", "Row 4", "row"),
     ]),
 ]
 
-FIELD_LABELS = {name: label.rstrip(" *") for _, fields in FORM_SECTIONS for name, label, _ in fields}
+# Pictures printed on the form: (kind, English label, Urdu label, page)
+PHOTO_SLOTS = [
+    ("photo", "Applicant Photo", "درخواست گزار کی تصویر", 1),
+    ("g1Photo", "Guarantor 1 Photo", "تصویر ضمانتی 1", 2),
+    ("g2Photo", "Guarantor 2 Photo", "تصویر ضمانتی 2", 2),
+]
+
+FIELD_NAMES = [n for _, fields in FORM_SECTIONS for n, _, _ in fields]
+FIELD_LABELS = {n: label.rstrip(" *") for _, fields in FORM_SECTIONS for n, label, _ in fields}
+PHOTO_KINDS = [k for k, *_ in PHOTO_SLOTS]
+PHOTO_LABELS = {k: en for k, en, _, _ in PHOTO_SLOTS}

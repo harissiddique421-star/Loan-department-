@@ -6,10 +6,12 @@ An online loan application system. Staff log in with a username and password, fi
 - **Login**: each person gets their own username and password. An Admin creates them under *Users*.
 - **Form save**: every field is saved in the database (Supabase PostgreSQL), so nothing is lost on refresh or redeploy.
 - **Shared access**: any logged-in user can open, edit and update any application. Set `RESTRICT_STAFF_ACCESS=1` if Staff should only see the applications they created or are assigned to.
-- **Photo & documents**: upload the applicant photo and several documents (PDF/JPG/PNG/WEBP/DOC/DOCX, 15 MB per request).
-  - The photo shows a preview before saving, and the phone camera works.
-  - Images show as thumbnails. Files can be downloaded or deleted.
-- **Print**: the *Print* button opens an A4 page with the photo, all fields and signature lines. To get a PDF, choose *Save as PDF* in the print dialog.
+- **The original 3-page Tooba form**:
+  - Typed values are printed on the scanned pages (`static/form/page1-3.png`): CNIC digit-by-digit in the 13 boxes, and the application ID in the loan-number oval.
+  - The applicant photo goes on page 1 and the two guarantor photos on page 2.
+  - The preview updates live while typing.
+- **Photo & documents**: big camera photos are shrunk before upload. Other documents (PDF/JPG/PNG/WEBP/DOC/DOCX) can be attached too. Files can be downloaded or deleted.
+- **Print / PDF**: *Print* prints the 3 A4 pages, and *Download PDF* makes a 3-page PDF directly. Both are on the form page and on the print page.
 - **History**: every create, save, upload, print and delete is logged with the user and the time.
 - **Admin**:
   - manage users and reset passwords
@@ -19,7 +21,10 @@ An online loan application system. Staff log in with a username and password, fi
   - delete applications
 
 ## Changing the form fields
-All fields are defined in **`form_fields.py`**. When you add or remove a field, or change its label there, the form page, print page and CSV export all update automatically. Do not change a field's `name` after real data has been saved.
+- Field names and labels are in **`form_fields.py`**. The input form, the application page and the CSV export all read from it.
+- Where each value is printed on the scanned page is set in `static/loanform.js` (`FIELDS`, `CNICS`, `IMAGES`), in pixels of the 1241×1755 page images.
+- A new field needs an entry in both files.
+- Do not change a field's `name` after real data has been saved.
 
 ## Where data is stored
 | What | Where |
