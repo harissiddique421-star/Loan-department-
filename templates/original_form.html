@@ -1,35 +1,57 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tooba Foundation Loan Form</title>
-<style>
-body{font-family:Arial,sans-serif;background:#f4f6f9;margin:0;padding:20px;color:#17243a}.wrap{max-width:900px;margin:auto;background:#fff;padding:24px;border-radius:12px}h1{color:#164d8d}h2{border-bottom:1px solid #ddd;padding-bottom:8px;margin-top:28px}.notice{background:#eaf4ff;padding:12px;border-radius:8px}label{display:block;margin:12px 0 4px;font-weight:600}input,textarea,select{width:100%;padding:10px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:6px}textarea{min-height:70px}button{margin-top:20px;background:#164d8d;color:white;border:0;border-radius:7px;padding:12px 22px;font-size:16px;cursor:pointer}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:600px){.grid{grid-template-columns:1fr}}.flash{background:#fff4d6;padding:10px;border-radius:6px}
-</style></head><body><main class="wrap">
-<h1>Tooba Foundation — Loan Application</h1>
-<p class="notice">Application ID: <strong>{{ a.app_id }}</strong> · Applicant: {{ a.applicant_name or "New applicant" }}. Form data is saved to this application record.</p>
-{% with messages=get_flashed_messages() %}{% if messages %}{% for message in messages %}<p class="flash">{{ message }}</p>{% endfor %}{% endif %}{% endwith %}
-<form method="post">
-<h2>Applicant Information</h2><div class="grid">
-<div><label>Full Name *</label><input name="full_name" required value="{{ data.get('full_name',a.applicant_name or '') }}"></div>
-<div><label>CNIC</label><input name="cnic" value="{{ data.get('cnic',a.cnic or '') }}" placeholder="XXXXX-XXXXXXX-X"></div>
-<div><label>Contact Number</label><input name="phone" value="{{ data.get('phone','') }}"></div>
-<div><label>Alternate Contact</label><input name="alternate_phone" value="{{ data.get('alternate_phone','') }}"></div>
-</div><label>Address</label><textarea name="address">{{ data.get('address','') }}</textarea>
-<label>City / Area</label><input name="city" value="{{ data.get('city','') }}">
-<h2>Loan Information</h2><div class="grid">
-<div><label>Requested Amount (PKR)</label><input type="number" min="0" step="1" name="amount" value="{{ data.get('amount','') }}"></div>
-<div><label>Loan Duration (months)</label><input type="number" min="1" name="duration_months" value="{{ data.get('duration_months','') }}"></div>
-</div><label>Loan Purpose</label><textarea name="purpose">{{ data.get('purpose','') }}</textarea>
-<h2>Income / Employment</h2><div class="grid">
-<div><label>Occupation</label><input name="occupation" value="{{ data.get('occupation','') }}"></div>
-<div><label>Monthly Income (PKR)</label><input type="number" min="0" name="monthly_income" value="{{ data.get('monthly_income','') }}"></div>
-<div><label>Employer / Business</label><input name="employer" value="{{ data.get('employer','') }}"></div>
-<div><label>Employment Duration</label><input name="employment_duration" value="{{ data.get('employment_duration','') }}"></div>
-</div><label>Income / Repayment Details</label><textarea name="income_details">{{ data.get('income_details','') }}</textarea>
-<h2>Guarantor</h2><div class="grid">
-<div><label>Guarantor Name</label><input name="guarantor_name" value="{{ data.get('guarantor_name','') }}"></div>
-<div><label>Guarantor CNIC</label><input name="guarantor_cnic" value="{{ data.get('guarantor_cnic','') }}"></div>
-<div><label>Guarantor Contact</label><input name="guarantor_phone" value="{{ data.get('guarantor_phone','') }}"></div>
-<div><label>Relationship</label><input name="guarantor_relationship" value="{{ data.get('guarantor_relationship','') }}"></div>
-</div><label>Additional Notes</label><textarea name="notes">{{ data.get('notes','') }}</textarea>
-<button type="submit">Save Loan Form</button>
-</form><p><a href="{{ url_for('edit_application',app_id=a.id) }}">Back to application / documents</a></p>
-</main></body></html>
+{% extends "base.html" %}{% block title %}Edit {{ a.app_id }}{% endblock %}
+{% block content %}
+{# Fields come from form_fields.py — add or change fields there. #}
+<form class="card" method="post" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="row between">
+    <div><h1>Loan Application — {{ a.app_id }}</h1>
+      <p class="muted">Har field database mein save hoti hai. Koi bhi staff baad mein khol kar edit kar sakta hai.</p></div>
+    <div style="min-width:180px"><label>Status</label>
+      <select name="status">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select></div>
+  </div>
+
+  <div class="formsec"><h2>Applicant Photo</h2>
+    <div class="row" style="align-items:flex-end;gap:16px">
+      <img id="photoPreview" class="photo" alt="Applicant photo"
+           src="{{ url_for('document', doc_id=a.photo.id, inline=1) if a.photo else url_for('static', filename='no-photo.svg') }}">
+      <div style="flex:1;min-width:220px">
+        <label>{{ 'Photo badlein' if a.photo else 'Photo upload karein' }} (JPG / PNG)</label>
+        <input type="file" name="applicant_photo" accept="image/jpeg,image/png,image/webp" capture="user" data-preview="photoPreview">
+      </div>
+    </div>
+  </div>
+
+  {% for title, fields in FORM_SECTIONS %}
+  <div class="formsec"><h2>{{ title }}</h2>
+    <div class="grid">
+    {% for name, label, type in fields %}
+      {% set val = data.get(name, '') %}
+      <div {% if type == 'textarea' %}style="grid-column:1/-1"{% endif %}>
+        <label for="f_{{ name }}">{{ label }}</label>
+        {% if type == 'textarea' %}
+          <textarea id="f_{{ name }}" name="{{ name }}">{{ val }}</textarea>
+        {% elif type.startswith('select:') %}
+          <select id="f_{{ name }}" name="{{ name }}">{% for opt in type[7:].split(',') %}<option value="{{ opt }}" {{ 'selected' if val == opt }}>{{ opt or '— select —' }}</option>{% endfor %}</select>
+        {% else %}
+          <input id="f_{{ name }}" name="{{ name }}" type="{{ type }}" value="{{ val }}"
+            {% if type == 'number' %}min="0" step="any"{% endif %}
+            {% if name == 'full_name' %}required{% endif %}
+            {% if 'cnic' in name %}placeholder="XXXXX-XXXXXXX-X"{% endif %}>
+        {% endif %}
+      </div>
+    {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="formsec"><h2>Documents (CNIC copy, bills, etc.)</h2>
+    <input type="file" name="documents" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx">
+    <p class="muted">Ek se zyada files ek saath chun sakte hain. Pehle se upload ki gayi files application page par hain.</p>
+  </div>
+
+  <div class="sticky-save row">
+    <button class="btn">Save Form</button>
+    <a class="btn light" href="{{ url_for('view_application', app_id=a.id) }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}
