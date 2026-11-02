@@ -1,24 +1,28 @@
-{% extends "base.html" %}{% block title %}Users{% endblock %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Users{% endblock %}
 {% block content %}
-<h1>Users (login accounts)</h1>
-<form class="card" method="post">
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Users</h1><p>Har staff member ka apna login. Disable karne se purani history mehfooz rehti hai.</p></div></div>
+<form class="card rise" style="--i:1" method="post">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <h2>Naya user banayein</h2>
+  <div class="card-head"><h2>{{ icon('plus') }} Naya user</h2></div>
   <div class="grid">
-    <div><label>Username</label><input name="username" required autocomplete="off"></div>
-    <div><label>Password (8+ characters)</label><input name="password" minlength="8" required autocomplete="new-password"></div>
-    <div><label>Role</label><select name="role"><option value="Staff">Staff — forms dekh/edit/print kar sakta hai</option><option value="Admin">Admin — upar wala sab + users, reports, export, delete</option></select></div>
+    <div><label for="nu">Username</label><div class="field-icon">{{ icon('user') }}<input id="nu" name="username" required autocomplete="off"></div></div>
+    <div><label for="np">Password (8+ characters)</label><div class="pw field-icon">{{ icon('key') }}<input id="np" name="password" type="password" minlength="8" required autocomplete="new-password"><button type="button" data-toggle-pw="np" aria-label="Password dikhayein">{{ icon('eye') }}</button></div></div>
+    <div><label for="nr">Role</label><select id="nr" name="role"><option value="Staff">Staff — forms dekh, edit aur print kar sakta hai</option><option value="Admin">Admin — upar sab + users, reports, export, delete</option></select></div>
   </div>
-  <p><button class="btn">Add user</button></p>
+  <p style="margin:16px 0 0"><button class="btn">{{ icon('plus') }} Add user</button></p>
 </form>
-<div class="card overflow"><table>
-  <tr><th>Username</th><th>Role</th><th>Status</th><th>Reset password</th><th></th></tr>
+<div class="card pad-0 rise" style="--i:2"><div class="overflow"><table class="users-table">
+  <thead><tr><th>User</th><th>Role</th><th>Status</th><th>Reset password</th><th></th></tr></thead>
+  <tbody>
   {% for u in users %}
   <tr>
-    <td><b>{{ u.username }}</b></td><td>{{ u.role }}</td><td>{{ 'Active' if u.active else 'Disabled' }}</td>
-    <td><form class="row" method="post" action="{{ url_for('reset_password', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="password" placeholder="Naya password" minlength="8" required style="width:160px" autocomplete="new-password"><button class="btn small light">Set</button></form></td>
-    <td>{% if u.id != current_user.id %}<form method="post" action="{{ url_for('toggle_user', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small {{ 'danger' if u.active else '' }}">{{ 'Disable' if u.active else 'Enable' }}</button></form>{% endif %}</td>
+    <td><span class="who"><span class="av">{{ u.username[:1]|upper }}</span><b>{{ u.username }}</b></span></td>
+    <td><span class="role {{ u.role }}">{{ u.role }}</span></td>
+    <td>{% if u.active %}<span class="state-on">Active</span>{% else %}<span class="state-off">Disabled</span>{% endif %}</td>
+    <td><form method="post" action="{{ url_for('reset_password', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="password" type="password" placeholder="Naya password" minlength="8" required autocomplete="new-password" aria-label="Naya password for {{ u.username }}"><button class="btn small light">{{ icon('key') }} Set</button></form></td>
+    <td style="text-align:right">{% if u.id != current_user.id %}<form method="post" action="{{ url_for('toggle_user', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small {{ 'danger' if u.active else 'light' }}">{{ 'Disable' if u.active else 'Enable' }}</button></form>{% endif %}</td>
   </tr>
   {% endfor %}
-</table></div>
+  </tbody>
+</table></div></div>
 {% endblock %}

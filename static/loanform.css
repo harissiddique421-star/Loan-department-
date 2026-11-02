@@ -1,33 +1,39 @@
 /* 3-page Tooba loan form (adapted from Tooba_Loan_Form_3_Pages.html). */
-.lf .panel{background:#fff;border-radius:14px;padding:16px;box-shadow:0 3px 16px #0001;margin-bottom:14px}
-.lf h1{font-size:20px;margin:0 0 6px}
+.lf .panel{background:#fff;border:1px solid var(--line,#e1e8e3);border-radius:18px;padding:22px;box-shadow:0 1px 2px rgba(20,40,28,.06);margin-bottom:18px;animation:rise .5s cubic-bezier(.2,.8,.2,1) both}
+.lf h1{font-size:22px;font-weight:800;margin:0 0 6px;color:var(--ink,#142019)}
 .lf .note{font-size:13px;color:#555;margin-bottom:14px}
-.lf .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.lf .sec{grid-column:1/-1;font-size:14px;font-weight:700;color:#126b2d;border-bottom:1px solid #dfe6df;padding:8px 0 4px;margin-top:4px}
+.lf .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.lf .sec{grid-column:1/-1;display:flex;align-items:center;gap:10px;font-size:15px;font-weight:800;color:var(--green,#0e7a36);padding:14px 0 6px;margin-top:6px;border-bottom:1px solid var(--line-2,#eef2ef)}
+.lf .sec::before{content:"";width:6px;height:18px;border-radius:3px;background:linear-gradient(var(--green,#0e7a36),var(--navy,#1b2f6e))}
 .lf .sec small{font-weight:400;color:#666}
-.lf label{font-size:12px;font-weight:700;display:block;margin:0 0 4px}
-.lf input,.lf select{width:100%;padding:9px;border:1px solid #bbb;border-radius:7px;font-size:14px}
-.lf input:focus{outline:2px solid #6aa66a}
+.lf label{font-size:12.5px;font-weight:700;display:block;margin:0 0 6px;color:var(--ink-2,#34443a)}
+.lf input,.lf select{width:100%;padding:10px 12px;border:1px solid #d3ddd6;border-radius:10px;font-size:14.5px}
+.lf input:focus{outline:none;border-color:var(--green,#0e7a36);box-shadow:0 0 0 4px rgba(14,122,54,.14)}
 .lf .full{grid-column:1/-1}
-.lf .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;position:sticky;bottom:0;background:#fff;padding:10px 0}
-.lf .actions button,.lf .actions a{border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;font-size:14px;text-decoration:none;display:inline-block}
-.lf .primary{background:#126b2d;color:#fff}
+.lf .actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px -22px -22px;position:sticky;bottom:0;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);padding:12px 22px;border-top:1px solid var(--line,#e1e8e3);border-radius:0 0 18px 18px;z-index:5}
+.lf .actions button,.lf .actions a{border:1px solid transparent;border-radius:10px;padding:10px 16px;font:700 14px var(--f-ui,system-ui);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px;transition:transform .2s,box-shadow .2s,background .2s}
+.lf .actions button:hover,.lf .actions a:hover{transform:translateY(-1px)}
+.lf .primary{background:var(--green,#0e7a36);color:#fff;box-shadow:0 6px 16px -8px rgba(14,122,54,.7)}
+.lf .primary:hover{background:var(--green-600,#0b6a2e);color:#fff}
 .lf .primary:disabled{opacity:.6;cursor:wait}
-.lf .secondary{background:#e9ecef;color:#222}
+.lf .secondary{background:#fff;color:var(--ink,#142019);border-color:var(--line,#e1e8e3)!important}
 .lf .uploads{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-.lf .upl{border:1px dashed #9bb59b;border-radius:10px;padding:8px;background:#f7faf7;display:flex;flex-direction:column;gap:6px}
+.lf .upl{border:1.5px dashed #a9c7b2;border-radius:14px;padding:10px;background:#f7fbf8;display:flex;flex-direction:column;gap:8px;transition:transform .25s,box-shadow .25s,border-color .25s}
+.lf .upl:hover{transform:translateY(-2px);box-shadow:0 10px 24px -14px rgba(20,40,28,.35)}
 .lf .upl .ttl{font-size:12px;font-weight:700;line-height:1.3}
 .lf .upl .ttl span{display:block;font-weight:400;color:#555}
-.lf .upl .thumb{height:74px;border-radius:6px;background:#fff;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:11px;color:#999}
+.lf .upl .thumb{height:96px;border-radius:10px;background:#fff;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;overflow:hidden;font-size:11px;color:#999}
 .lf .upl .thumb img{max-width:100%;max-height:100%;object-fit:contain}
 .lf .upl .btns{display:flex;gap:6px}
-.lf .upl .pick{flex:1;text-align:center;background:#126b2d;color:#fff;border-radius:7px;padding:7px 6px;font-size:12px;font-weight:700;cursor:pointer;margin:0}
+.lf .upl .pick{flex:1;text-align:center;background:var(--green,#0e7a36);color:#fff;border-radius:7px;padding:7px 6px;font-size:12px;font-weight:700;cursor:pointer;margin:0}
 .lf .upl .pick input{display:none}
 .lf .upl .rm{background:#f1d6d6;color:#8a1c1c;padding:7px 9px;font-size:12px;display:none;border:0;border-radius:7px;cursor:pointer}
 .lf .upl.has .rm{display:block}
-.lf .upl.has{border-style:solid;border-color:#126b2d}
-.lf .pageTag{text-align:center;font-size:12px;font-weight:700;color:#555;margin:18px 0 6px}
-.lf .preview{position:relative;width:min(100%,794px);aspect-ratio:1241/1755;margin:0 auto;background:#fff;container-type:inline-size;overflow:hidden;box-shadow:0 3px 16px #0002}
+.lf .upl.has{border-style:solid;border-color:var(--green,#0e7a36);background:#fff}
+.lf .upl.has .thumb img{animation:pop .45s cubic-bezier(.2,1.4,.4,1) both}
+@keyframes pop{from{opacity:0;transform:scale(.7)}}
+.lf .pageTag{text-align:center;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted,#66766c);margin:22px 0 8px}
+.lf .preview{position:relative;width:min(100%,794px);aspect-ratio:1241/1755;margin:0 auto;background:#fff;container-type:inline-size;overflow:hidden;border-radius:4px;box-shadow:0 30px 60px -30px rgba(19,34,79,.45),0 2px 6px rgba(0,0,0,.06);animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
 .lf .preview>img.bg{display:block;width:100%;height:100%;object-fit:fill}
 .lf .field{position:absolute;display:flex;justify-content:center;white-space:nowrap;overflow:visible;font-family:'Bookman Old Style','Bookman','URW Bookman','URW Bookman L',Georgia,'Jameel Noori Nastaleeq','Noto Nastaliq Urdu',serif;font-weight:700;color:#111;line-height:1}
 .lf .field.line{align-items:flex-end}

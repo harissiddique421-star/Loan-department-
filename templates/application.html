@@ -1,83 +1,97 @@
-{% extends "base.html" %}{% block title %}{{ a.app_id }}{% endblock %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}{{ a.app_id }}{% endblock %}
 {% block content %}
 {% set d = a.form_values %}
-<div class="row between">
-  <h1>{{ a.app_id }} — {{ a.applicant_name or 'New applicant' }} <span class="badge {{ a.status }}">{{ a.status }}</span></h1>
+<div class="page-head rise">
+  <div>
+    <a class="muted" href="{{ url_for('dashboard') }}">{{ icon('back') }} Applications</a>
+  </div>
   <div class="row">
-    <a class="btn" href="{{ url_for('loan_form', app_id=a.id) }}">✎ Edit Form</a>
-    <a class="btn light" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank">🖨 Print</a>
+    <a class="btn" href="{{ url_for('loan_form', app_id=a.id) }}">{{ icon('edit') }} Edit Form</a>
+    <a class="btn light" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank">{{ icon('print') }} Print / PDF</a>
   </div>
 </div>
 
-<div class="card">
-  <div class="row" style="align-items:flex-start;gap:20px">
+<section class="card rise" style="--i:1">
+  <div class="profile">
     <img class="photo" alt="Applicant photo" src="{{ url_for('document', doc_id=a.photo.id, inline=1) if a.photo else url_for('static', filename='no-photo.svg') }}">
-    <dl class="kv" style="flex:1;min-width:240px">
-      <dt>Father / Husband</dt><dd>{{ d.get('father') or '—' }}</dd>
-      <dt>CNIC</dt><dd>{{ d.get('cnic') or '—' }}</dd>
-      <dt>Phone</dt><dd>{{ d.get('phone') or '—' }}</dd>
-      <dt>Loan amount</dt><dd>{{ ('Rs. ' ~ d.get('amount')) if d.get('amount') else '—' }}</dd>
-      <dt>Monthly installment</dt><dd>{{ ('Rs. ' ~ d.get('qist')) if d.get('qist') else '—' }}</dd>
-      <dt>Business / Job</dt><dd>{{ d.get('business') or '—' }}</dd>
-      <dt>Created</dt><dd>{{ a.created_at.strftime('%d-%m-%Y %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}</dd>
-      <dt>Last updated</dt><dd>{{ a.updated_at.strftime('%d-%m-%Y %H:%M') if a.updated_at }}{% if a.updated_by %} by {{ names.get(a.updated_by, '?') }}{% endif %}</dd>
-    </dl>
+    <div>
+      <div class="title-line"><h1>{{ a.applicant_name or 'New applicant' }}</h1><span class="badge {{ a.status }}">{{ a.status }}</span></div>
+      <div class="meta"><span class="appid">{{ a.app_id }}</span> · Created {{ a.created_at.strftime('%d %b %Y, %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}{% if a.updated_by %} · Last updated {{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }} by {{ names.get(a.updated_by, '?') }}{% endif %}</div>
+      <div class="facts">
+        <div class="fact">{{ icon('user') }}<div><small>Father / Husband</small><span>{{ d.get('father') or '—' }}</span></div></div>
+        <div class="fact">{{ icon('id') }}<div><small>CNIC</small><span class="mono">{{ d.get('cnic') or '—' }}</span></div></div>
+        <div class="fact">{{ icon('phone') }}<div><small>Phone</small><span class="mono">{{ d.get('phone') or '—' }}</span></div></div>
+        <div class="fact">{{ icon('cash') }}<div><small>Loan amount</small><span>{{ ('Rs. ' ~ d.get('amount')) if d.get('amount') else '—' }}</span></div></div>
+        <div class="fact">{{ icon('calendar') }}<div><small>Monthly installment</small><span>{{ ('Rs. ' ~ d.get('qist')) if d.get('qist') else '—' }}</span></div></div>
+        <div class="fact">{{ icon('store') }}<div><small>Business / Job</small><span>{{ d.get('business') or '—' }}</span></div></div>
+      </div>
+      <div class="controls">
+        <form method="post" action="{{ url_for('update_status', app_id=a.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select name="status" aria-label="Status">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select>
+          <button class="btn small">{{ icon('check') }} Update status</button>
+        </form>
+        <form method="post" action="{{ url_for('assign_application', app_id=a.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select name="staff_id" aria-label="Assign to"><option value="">Unassigned</option>{% for u in staff %}<option value="{{ u.id }}" {{ 'selected' if a.assigned_to == u.id }}>{{ u.username }}</option>{% endfor %}</select>
+          <button class="btn small light">{{ icon('users') }} Assign</button>
+        </form>
+      </div>
+    </div>
   </div>
-  <div class="row" style="margin-top:14px">
-    <form class="row" method="post" action="{{ url_for('update_status', app_id=a.id) }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <select name="status" style="width:auto">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select>
-      <button class="btn small">Update status</button>
-    </form>
-    <form class="row" method="post" action="{{ url_for('assign_application', app_id=a.id) }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <select name="staff_id" style="width:auto"><option value="">Unassigned</option>{% for u in staff %}<option value="{{ u.id }}" {{ 'selected' if a.assigned_to == u.id }}>{{ u.username }}</option>{% endfor %}</select>
-      <button class="btn small light">Assign</button>
-    </form>
-  </div>
-</div>
+</section>
 
-<details class="card">
-  <summary><b>Poora form (saari details)</b></summary>
+<details class="card rise" style="--i:2">
+  <summary>Poora form (saari details)</summary>
   {% for title, fields in FORM_SECTIONS %}
   <h3>{{ title }}</h3>
   <dl class="kv">{% for name, label, kind in fields %}<dt>{{ label.rstrip(' *') }}</dt><dd>{{ d.get(name) or '—' }}</dd>{% endfor %}</dl>
   {% endfor %}
 </details>
 
-<div class="card">
-  <h2>Pictures &amp; Documents</h2>
-  <form class="row" method="post" action="{{ url_for('upload', app_id=a.id) }}" enctype="multipart/form-data">
+<section class="card rise" style="--i:3">
+  <div class="card-head"><h2>{{ icon('files') }} Pictures &amp; Documents</h2><span class="muted">{{ docs|length }} files</span></div>
+  <form class="uploadbar" method="post" action="{{ url_for('upload', app_id=a.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="file" name="file" multiple required accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" style="flex:1;min-width:220px">
-    <select name="kind" style="width:auto"><option value="document">Document</option>{% for kind, en, ur, pg in PHOTO_SLOTS %}<option value="{{ kind }}">{{ en }}</option>{% endfor %}</select>
-    <button class="btn">Upload</button>
+    <input type="file" name="file" multiple required accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" aria-label="Files">
+    <select name="kind" aria-label="File type"><option value="document">Document</option>{% for kind, en, ur, pg in PHOTO_SLOTS %}<option value="{{ kind }}">{{ en }}</option>{% endfor %}</select>
+    <button class="btn">{{ icon('upload') }} Upload</button>
   </form>
+  {% if docs %}
   <ul class="files">
   {% for doc in docs %}
-    <li>
-      <a href="{{ url_for('document', doc_id=doc.id, inline=1) }}" target="_blank">
-        {% if doc.is_image %}<img src="{{ url_for('document', doc_id=doc.id, inline=1) }}" alt="">{% else %}<div class="fileicon">{{ doc.original_name.rsplit('.',1)[-1]|upper }}</div>{% endif %}
-        {{ doc.original_name }}</a>
-      <div class="muted">{{ (PHOTO_LABELS[doc.kind] ~ ' · ') if doc.kind in PHOTO_LABELS }}{{ (doc.size // 1024) if doc.size else '?' }} KB · {{ names.get(doc.uploaded_by, '?') }}</div>
-      <div class="row" style="margin-top:6px">
-        <a class="btn small light" href="{{ url_for('document', doc_id=doc.id) }}">Download</a>
-        <form method="post" action="{{ url_for('delete_document', doc_id=doc.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" data-confirm="Ye file delete karein?">Delete</button></form>
+    <li class="rise" style="--i:{{ [loop.index, 10]|min }}">
+      <a class="thumb" href="{{ url_for('document', doc_id=doc.id, inline=1) }}" target="_blank" title="{{ doc.original_name }}">
+        {% if doc.is_image %}<img src="{{ url_for('document', doc_id=doc.id, inline=1) }}" alt="" loading="lazy">{% else %}<span class="fileicon">{{ doc.original_name.rsplit('.',1)[-1]|upper }}</span>{% endif %}
+      </a>
+      <div class="info">
+        {% if doc.kind in PHOTO_LABELS %}<span class="tag">{{ PHOTO_LABELS[doc.kind] }}</span>{% endif %}
+        <b>{{ doc.original_name }}</b>
+        <span class="muted">{{ (doc.size // 1024) if doc.size else '?' }} KB · {{ names.get(doc.uploaded_by, '?') }}</span>
+      </div>
+      <div class="ops">
+        <a class="btn small light" href="{{ url_for('document', doc_id=doc.id) }}">{{ icon('download') }}</a>
+        <form method="post" action="{{ url_for('delete_document', doc_id=doc.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" data-confirm="Ye file delete karein?" title="Delete">{{ icon('trash') }}</button></form>
       </div>
     </li>
-  {% else %}<li class="muted" style="border:0">Abhi koi file upload nahi hui.</li>{% endfor %}
+  {% endfor %}
   </ul>
-</div>
+  {% else %}
+  <div class="empty" style="padding:24px"><div class="bubble">{{ icon('upload') }}</div><b>Abhi koi file nahi</b>CNIC copy, bills ya photos upar se upload karein.</div>
+  {% endif %}
+</section>
 
-<div class="card">
-  <h2>History</h2>
-  <table>{% for l in logs %}<tr><td class="muted" style="width:150px">{{ l.created_at.strftime('%d-%m-%Y %H:%M') }}</td><td>{{ names.get(l.user_id, '?') }}</td><td>{{ l.action }}</td></tr>{% endfor %}</table>
-</div>
+<section class="card rise" style="--i:4">
+  <div class="card-head"><h2>{{ icon('clock') }} History</h2></div>
+  <ol class="timeline">
+  {% for l in logs %}<li><span class="pt"></span><div><b>{{ names.get(l.user_id, '?') }}</b> — {{ l.action }}<time>{{ l.created_at.strftime('%d %b %Y, %H:%M') }}</time></div></li>{% else %}<li class="muted">Abhi koi history nahi.</li>{% endfor %}
+  </ol>
+</section>
 
 {% if current_user.role == 'Admin' %}
 <form method="post" action="{{ url_for('delete_application', app_id=a.id) }}" class="no-print">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button class="btn small danger" data-confirm="Poori application aur uski files hamesha ke liye delete ho jayengi. Pakka?">Delete application</button>
+  <button class="btn small danger" data-confirm="Poori application aur uski files hamesha ke liye delete ho jayengi. Pakka?">{{ icon('trash') }} Delete application</button>
 </form>
 {% endif %}
 {% endblock %}

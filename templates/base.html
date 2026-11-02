@@ -1,35 +1,50 @@
-<!doctype html>
+{% from "_icons.html" import icon %}<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0e7a36">
 <title>{% block title %}Tooba Foundation{% endblock %} · Loan Department</title>
 <link rel="icon" href="{{ url_for('static', filename='tooba-logo.png') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=Noto+Nastaliq+Urdu:wght@500&display=swap">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% block body_class %}{% endblock %}">
 {% if current_user.is_authenticated %}
+{% set ep = request.endpoint or '' %}
 <header class="topbar no-print">
-  <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt=""><span>Tooba Foundation<small>Loan Department</small></span></a>
-  <nav>
-    <a href="{{ url_for('dashboard') }}">Applications</a>
-    {% if current_user.role == 'Admin' %}
-    <a href="{{ url_for('users') }}">Users</a>
-    <a href="{{ url_for('reports') }}">Reports</a>
-    {% endif %}
-    <a href="{{ url_for('change_password') }}">{{ current_user.username }}</a>
-    <form method="post" action="{{ url_for('logout') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="linkbtn">Logout</button></form>
-  </nav>
+  <div class="topbar-in">
+    <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation"><span>Tooba Foundation<small>Loan Department</small></span></a>
+    <nav class="nav">
+      <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep in ('dashboard','view_application','loan_form','print_application') }}">{{ icon('grid') }}<span>Applications</span></a>
+      {% if current_user.role == 'Admin' %}
+      <a href="{{ url_for('users') }}" class="{{ 'on' if ep == 'users' }}">{{ icon('users') }}<span>Users</span></a>
+      <a href="{{ url_for('reports') }}" class="{{ 'on' if ep == 'reports' }}">{{ icon('chart') }}<span>Reports</span></a>
+      {% endif %}
+    </nav>
+    <div class="me">
+      <a class="chip" href="{{ url_for('change_password') }}" title="Password badlein"><span class="av">{{ current_user.username[:1]|upper }}</span><span class="nm">{{ current_user.username }}<small>{{ current_user.role }}</small></span></a>
+      <form method="post" action="{{ url_for('logout') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="iconbtn" title="Logout" aria-label="Logout">{{ icon('logout') }}</button></form>
+    </div>
+  </div>
 </header>
 {% endif %}
+{% with msgs = get_flashed_messages() %}{% if msgs %}
+<div class="toasts no-print" role="status">
+  {% for m in msgs %}<div class="toast{{ ' warn' if ('nahi' in m or 'ghalat' in m or 'zaroori' in m or 'Lekin' in m) }}">{{ icon('check') }}<span>{{ m }}</span><button type="button" aria-label="Band karein" data-dismiss>×</button></div>{% endfor %}
+</div>
+{% endif %}{% endwith %}
+{% block page %}
 <main class="container">
   {% if USING_SQLITE and ON_VERCEL and current_user.is_authenticated %}
-  <p class="flash warn no-print">⚠ DATABASE_URL set nahi hai — data temporary hai aur delete ho jayega. Vercel settings mein Supabase DATABASE_URL lagayein.</p>
+  <div class="banner no-print">{{ icon('database') }} DATABASE_URL set nahi hai — data temporary hai aur delete ho jayega. Vercel settings mein Supabase DATABASE_URL lagayein.</div>
   {% endif %}
-  {% for m in get_flashed_messages() %}<p class="flash no-print">{{ m }}</p>{% endfor %}
   {% block content %}{% endblock %}
 </main>
+{% endblock %}
 </body>
 </html>
