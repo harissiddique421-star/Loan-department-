@@ -1,6 +1,35 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tooba Foundation Loan Form</title>
-<style>body{font-family:Arial,sans-serif;background:#f4f6f9;margin:0;padding:20px;color:#17243a}.wrap{max-width:850px;margin:auto;background:#fff;padding:24px;border-radius:12px}h1{color:#164d8d}.notice{background:#fff4d6;padding:14px;border-radius:8px}label{display:block;margin:12px 0 4px}input,textarea,select{width:100%;padding:10px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:6px}</style></head>
-<body><main class="wrap"><h1>Tooba Foundation — Loan Application</h1><p class="notice">This is a starter form template. The original legacy form should be restored before production use. This page does not currently save form values.</p><form>
-<h2>Applicant Information</h2><label>Full Name</label><input name="full_name"><label>CNIC</label><input name="cnic" placeholder="XXXXX-XXXXXXX-X"><label>Contact Number</label><input name="phone"><label>Address</label><textarea name="address"></textarea>
-<h2>Loan Information</h2><label>Requested Amount (PKR)</label><input type="number" name="amount"><label>Purpose</label><textarea name="purpose"></textarea><label>Employment / Income Details</label><textarea name="income"></textarea><p>For document upload and record saving, return to the application edit page.</p></form></main></body></html>
+<style>
+body{font-family:Arial,sans-serif;background:#f4f6f9;margin:0;padding:20px;color:#17243a}.wrap{max-width:900px;margin:auto;background:#fff;padding:24px;border-radius:12px}h1{color:#164d8d}h2{border-bottom:1px solid #ddd;padding-bottom:8px;margin-top:28px}.notice{background:#eaf4ff;padding:12px;border-radius:8px}label{display:block;margin:12px 0 4px;font-weight:600}input,textarea,select{width:100%;padding:10px;box-sizing:border-box;border:1px solid #ccd4df;border-radius:6px}textarea{min-height:70px}button{margin-top:20px;background:#164d8d;color:white;border:0;border-radius:7px;padding:12px 22px;font-size:16px;cursor:pointer}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:600px){.grid{grid-template-columns:1fr}}.flash{background:#fff4d6;padding:10px;border-radius:6px}
+</style></head><body><main class="wrap">
+<h1>Tooba Foundation — Loan Application</h1>
+<p class="notice">Application ID: <strong>{{ a.app_id }}</strong> · Applicant: {{ a.applicant_name or "New applicant" }}. Form data is saved to this application record.</p>
+{% with messages=get_flashed_messages() %}{% if messages %}{% for message in messages %}<p class="flash">{{ message }}</p>{% endfor %}{% endif %}{% endwith %}
+<form method="post">
+<h2>Applicant Information</h2><div class="grid">
+<div><label>Full Name *</label><input name="full_name" required value="{{ data.get('full_name',a.applicant_name or '') }}"></div>
+<div><label>CNIC</label><input name="cnic" value="{{ data.get('cnic',a.cnic or '') }}" placeholder="XXXXX-XXXXXXX-X"></div>
+<div><label>Contact Number</label><input name="phone" value="{{ data.get('phone','') }}"></div>
+<div><label>Alternate Contact</label><input name="alternate_phone" value="{{ data.get('alternate_phone','') }}"></div>
+</div><label>Address</label><textarea name="address">{{ data.get('address','') }}</textarea>
+<label>City / Area</label><input name="city" value="{{ data.get('city','') }}">
+<h2>Loan Information</h2><div class="grid">
+<div><label>Requested Amount (PKR)</label><input type="number" min="0" step="1" name="amount" value="{{ data.get('amount','') }}"></div>
+<div><label>Loan Duration (months)</label><input type="number" min="1" name="duration_months" value="{{ data.get('duration_months','') }}"></div>
+</div><label>Loan Purpose</label><textarea name="purpose">{{ data.get('purpose','') }}</textarea>
+<h2>Income / Employment</h2><div class="grid">
+<div><label>Occupation</label><input name="occupation" value="{{ data.get('occupation','') }}"></div>
+<div><label>Monthly Income (PKR)</label><input type="number" min="0" name="monthly_income" value="{{ data.get('monthly_income','') }}"></div>
+<div><label>Employer / Business</label><input name="employer" value="{{ data.get('employer','') }}"></div>
+<div><label>Employment Duration</label><input name="employment_duration" value="{{ data.get('employment_duration','') }}"></div>
+</div><label>Income / Repayment Details</label><textarea name="income_details">{{ data.get('income_details','') }}</textarea>
+<h2>Guarantor</h2><div class="grid">
+<div><label>Guarantor Name</label><input name="guarantor_name" value="{{ data.get('guarantor_name','') }}"></div>
+<div><label>Guarantor CNIC</label><input name="guarantor_cnic" value="{{ data.get('guarantor_cnic','') }}"></div>
+<div><label>Guarantor Contact</label><input name="guarantor_phone" value="{{ data.get('guarantor_phone','') }}"></div>
+<div><label>Relationship</label><input name="guarantor_relationship" value="{{ data.get('guarantor_relationship','') }}"></div>
+</div><label>Additional Notes</label><textarea name="notes">{{ data.get('notes','') }}</textarea>
+<button type="submit">Save Loan Form</button>
+</form><p><a href="{{ url_for('edit_application',app_id=a.id) }}">Back to application / documents</a></p>
+</main></body></html>
