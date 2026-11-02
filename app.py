@@ -666,10 +666,12 @@ def add_missing_columns():
 with app.app_context():
     db.create_all()
     add_missing_columns()
-    admin_name = os.getenv("ADMIN_USERNAME", "admin")
-    if not User.query.filter_by(username=admin_name).first():
-        admin = User(username=admin_name, role="Admin")
-        admin.set_password(os.getenv("ADMIN_PASSWORD", "ChangeThisAdminPassword123!"))
+    # Create the first admin only when the database has no admin yet, and only from
+    # ADMIN_USERNAME/ADMIN_PASSWORD. Never fall back to a built-in password on a real database.
+    admin_pw = os.getenv("ADMIN_PASSWORD") or ("ChangeThisAdminPassword123!" if USING_SQLITE else "")
+    if admin_pw and not User.query.filter_by(role="Admin").first():
+        admin = User(username=os.getenv("ADMIN_USERNAME", "admin"), role="Admin")
+        admin.set_password(admin_pw)
         db.session.add(admin)
         db.session.commit()
 
