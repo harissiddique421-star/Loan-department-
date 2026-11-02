@@ -1,38 +1,60 @@
-{% extends "base.html" %}{% block title %}Applications{% endblock %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Applications{% endblock %}
 {% block content %}
-<div class="row between">
-  <h1>Loan Applications</h1>
-  <form method="post" action="{{ url_for('new_application') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">+ New Application</button></form>
-</div>
+{% set colors = {'Draft':'#7b8a80','Pending':'#c27a0e','In Review':'#6b3fd1','Approved':'#0e7a36','Rejected':'#c4372f','Completed':'#1b2f6e'} %}
+<section class="hero rise">
+  <div class="hero-in">
+    <div class="urdu" lang="ur" dir="rtl">السلام علیکم</div>
+    <h1>Khush aamdeed, {{ current_user.username }}</h1>
+    <p>{{ total }} {{ 'application' if total == 1 else 'applications' }} record mein {{ 'hai' if total == 1 else 'hain' }}{% if counts['Pending'] %}, jin mein {{ counts['Pending'] }} pending hain{% endif %}. Nayi application shuru karein ya kisi record ko khol kar update karein.</p>
+  </div>
+  <form method="post" action="{{ url_for('new_application') }}" class="hero-in"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">{{ icon('plus') }} New Application</button></form>
+</section>
+
 <div class="stats">
-  <a class="stat {{ 'on' if not status }}" href="{{ url_for('dashboard', q=q) }}">All<b>{{ total }}</b></a>
-  {% for s in STATUSES %}<a class="stat {{ 'on' if status == s }}" href="{{ url_for('dashboard', status=s, q=q) }}">{{ s }}<b>{{ counts[s] }}</b></a>{% endfor %}
+  <a class="stat rise {{ 'on' if not status }}" style="--i:1;--c:var(--navy)" href="{{ url_for('dashboard', q=q) }}"><span class="lbl"><span class="dot"></span>All</span><b data-count="{{ total }}">{{ total }}</b></a>
+  {% for s in STATUSES %}<a class="stat rise {{ 'on' if status == s }}" style="--i:{{ loop.index + 1 }};--c:{{ colors[s] }}" href="{{ url_for('dashboard', status=s, q=q) }}"><span class="lbl"><span class="dot"></span>{{ s }}</span><b data-count="{{ counts[s] }}">{{ counts[s] }}</b></a>{% endfor %}
 </div>
-<div class="card">
-  <form class="row" method="get">
-    <input name="q" value="{{ q }}" placeholder="Naam, CNIC ya TBF ID se search karein" style="flex:1;min-width:200px">
+
+<div class="card pad-0 rise" style="--i:9">
+  <form class="toolbar" method="get">
+    <div class="field-icon">{{ icon('search') }}<input name="q" value="{{ q }}" placeholder="Naam, CNIC ya TBF ID se search karein" aria-label="Search"></div>
     {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
-    <button class="btn">Search</button>{% if q %}<a href="{{ url_for('dashboard', status=status) }}">Clear</a>{% endif %}
+    <button class="btn navy">{{ icon('search') }} Search</button>
+    {% if q or status %}<a class="btn light" href="{{ url_for('dashboard') }}">{{ icon('x') }} Clear</a>{% endif %}
   </form>
+  {% if apps %}
   <div class="overflow"><table>
-    <tr><th>ID</th><th>Applicant</th><th>CNIC</th><th>Status</th><th>Last updated</th><th></th></tr>
+    <thead><tr><th>Applicant</th><th>ID</th><th class="hide-sm">CNIC</th><th>Status</th><th class="hide-sm">Last update</th><th style="text-align:right">Actions</th></tr></thead>
+    <tbody>
     {% for a in apps %}
-    <tr>
-      <td><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.app_id }}</b></a></td>
-      <td>{{ a.applicant_name or '—' }}</td>
-      <td>{{ a.cnic or '—' }}</td>
+    <tr class="rise" style="--i:{{ [loop.index, 12]|min + 9 }}">
+      <td><a class="who" href="{{ url_for('view_application', app_id=a.id) }}"><span class="av">{{ (a.applicant_name or '?')[:1]|upper }}</span><span><b>{{ a.applicant_name or 'New applicant' }}</b><small>{{ (a.data.get('business') or a.data.get('phone') or '—') }}</small></span></a></td>
+      <td><span class="appid">{{ a.app_id }}</span></td>
+      <td class="hide-sm mono">{{ a.cnic or '—' }}</td>
       <td><span class="badge {{ a.status }}">{{ a.status }}</span></td>
-      <td class="muted">{{ a.updated_at.strftime('%d-%m-%Y %H:%M') if a.updated_at }}{% if a.updated_by %}<br>by {{ names.get(a.updated_by, '?') }}{% endif %}</td>
-      <td class="row">
-        <a class="btn small light" href="{{ url_for('view_application', app_id=a.id) }}">Open</a>
-        <a class="btn small light" href="{{ url_for('loan_form', app_id=a.id) }}">Edit</a>
-        <a class="btn small light" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank">Print</a>
-      </td>
+      <td class="hide-sm muted">{{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }}{% if a.updated_by %}<br>by {{ names.get(a.updated_by, '?') }}{% endif %}</td>
+      <td><div class="acts">
+        <a class="act" href="{{ url_for('view_application', app_id=a.id) }}" title="Open">{{ icon('eye') }}</a>
+        <a class="act" href="{{ url_for('loan_form', app_id=a.id) }}" title="Edit">{{ icon('edit') }}</a>
+        <a class="act" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank" title="Print">{{ icon('print') }}</a>
+      </div></td>
     </tr>
-    {% else %}<tr><td colspan="6" class="muted">Koi application nahi mili.</td></tr>{% endfor %}
+    {% endfor %}
+    </tbody>
   </table></div>
+  {% else %}
+  <div class="empty">
+    <div class="bubble">{{ icon('files') }}</div>
+    <b>{{ 'Koi application nahi mili' if (q or status) else 'Abhi koi application nahi' }}</b>
+    {{ 'Search ya filter badal kar dekhein.' if (q or status) else 'Upar "New Application" daba kar pehla form bharein.' }}
+  </div>
+  {% endif %}
 </div>
+
 {% if current_user.role == 'Admin' %}
-<p class="row no-print"><a class="btn light small" href="{{ url_for('export_csv') }}">Export CSV (Excel)</a><a class="btn light small" href="{{ url_for('backup_export') }}">Download backup</a></p>
+<div class="row no-print">
+  <a class="btn light small" href="{{ url_for('export_csv') }}">{{ icon('download') }} Export CSV (Excel)</a>
+  <a class="btn light small" href="{{ url_for('backup_export') }}">{{ icon('database') }} Download backup</a>
+</div>
 {% endif %}
 {% endblock %}

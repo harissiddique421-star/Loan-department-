@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block title %}Edit {{ a.app_id }}{% endblock %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Edit {{ a.app_id }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='loanform.css') }}">{% endblock %}
 {% block content %}
 {% set v = payload['values'] %}
@@ -7,7 +7,8 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="row between">
     <div>
-      <h1>TOOBA FOUNDATION — Loan Form · {{ a.app_id }}</h1>
+      <div class="eyebrow">{{ a.app_id }} · {{ a.status }}</div>
+      <h1>{{ a.applicant_name or 'Nayi loan application' }}</h1>
       <div class="note">Fill the information below once. Each entry is placed in front of its own label on the form, and CNIC goes digit-by-digit into the 13 boxes. Page 2 takes the guarantor photos (signatures and thumb impressions are put by hand after printing); page 3 takes the loan details. <b>"Save Form" dabayein</b> — phir koi bhi staff isay khol kar edit ya print kar sakta hai.</div>
     </div>
     <div style="min-width:170px"><label>Status</label>
@@ -50,9 +51,9 @@
     <div class="full"><input type="file" name="documents" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx"></div>
   </div>
   <div class="actions">
-    <button type="submit" class="primary">💾 Save Form</button>
-    <button type="button" class="primary" data-action="pdf">Download PDF (3 pages)</button>
-    <button type="button" class="primary" data-action="print">Print</button>
+    <button type="submit" class="primary">{{ icon('check') }} Save Form</button>
+    <button type="button" class="primary" data-action="pdf">{{ icon('download') }} Download PDF (3 pages)</button>
+    <button type="button" class="primary" data-action="print">{{ icon('print') }} Print</button>
     <button type="button" class="secondary" data-action="clear">Clear</button>
     <a class="secondary" href="{{ url_for('view_application', app_id=a.id) }}">Cancel</a>
   </div>
