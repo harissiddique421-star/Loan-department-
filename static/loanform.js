@@ -182,25 +182,27 @@ function removeImage(id) {
   const rm = form && form.elements['remove_' + id]; if (rm) rm.value = '1';
 }
 
-/* Shrink big camera photos before upload (keeps storage and PDF light). */
+/* Keep the real photo. Only very large camera photos are scaled down (to 1600px on the long side),
+   which is still far sharper than the photo box on the printed A4 page. */
 function loadImage(id, file) {
   if (!file.type.startsWith('image/')) { showMsg('Please choose an image file.', true); return; }
   const reader = new FileReader();
   reader.onload = e => {
     const raw = new Image();
     raw.onload = () => {
-      const k = Math.min(1, 1000 / Math.max(raw.naturalWidth, raw.naturalHeight));
+      const k = Math.min(1, 1600 / Math.max(raw.naturalWidth, raw.naturalHeight));
       const c = document.createElement('canvas');
       c.width = Math.max(1, Math.round(raw.naturalWidth * k));
       c.height = Math.max(1, Math.round(raw.naturalHeight * k));
       const cx = c.getContext('2d');
+      cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high';
       cx.fillStyle = '#fff'; cx.fillRect(0, 0, c.width, c.height);
       cx.drawImage(raw, 0, 0, c.width, c.height);
       c.toBlob(blob => {
         pending[id] = blob;
         const rm = form && form.elements['remove_' + id]; if (rm) rm.value = '0';
         showImage(id, URL.createObjectURL(blob)).then(() => showMsg('Picture added — "Save Form" dabayein.'));
-      }, 'image/jpeg', 0.9);
+      }, 'image/jpeg', 0.95);
     };
     raw.onerror = () => showMsg('This picture could not be opened. Try a JPG or PNG.', true);
     raw.src = e.target.result;
@@ -215,6 +217,7 @@ function renderPage(p, SCALE) {
   canvas.width = FORM_W * SCALE; canvas.height = FORM_H * SCALE;
   const ctx = canvas.getContext('2d');
   ctx.scale(SCALE, SCALE);
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, FORM_W, FORM_H);
   ctx.drawImage(bg, 0, 0, FORM_W, FORM_H);
   IMAGES.filter(m => m.page === p && imgData[m.id]).forEach(m => {
