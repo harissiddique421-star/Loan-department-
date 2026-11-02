@@ -25,11 +25,17 @@ if dburl.startswith("postgres://"):
 elif dburl.startswith("postgresql://"):
     dburl = dburl.replace("postgresql://", "postgresql+psycopg://", 1)
 USING_SQLITE = dburl.startswith("sqlite")
+ENGINE_OPTIONS = {"pool_pre_ping": True}
+if not USING_SQLITE:
+    # Supabase's transaction pooler (port 6543) cannot keep prepared statements, and each
+    # Vercel function call is short-lived, so open a fresh pooled connection per request.
+    from sqlalchemy.pool import NullPool
+    ENGINE_OPTIONS = {"poolclass": NullPool, "connect_args": {"prepare_threshold": None}}
 
 app.config.update(
     SQLALCHEMY_DATABASE_URI=dburl,
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    SQLALCHEMY_ENGINE_OPTIONS={"pool_pre_ping": True},
+    SQLALCHEMY_ENGINE_OPTIONS=ENGINE_OPTIONS,
     MAX_CONTENT_LENGTH=15 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
