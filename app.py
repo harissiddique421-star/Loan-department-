@@ -13,7 +13,6 @@ from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, 
                          PHOTO_LABELS)
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-only-change-me")
 
 ON_VERCEL = bool(os.getenv("VERCEL"))
 dburl = os.getenv("DATABASE_URL", "")
@@ -25,6 +24,22 @@ if dburl.startswith("postgres://"):
 elif dburl.startswith("postgresql://"):
     dburl = dburl.replace("postgresql://", "postgresql+psycopg://", 1)
 USING_SQLITE = dburl.startswith("sqlite")
+
+
+def _secret_key():
+    """SECRET_KEY from the environment. On Vercel without one, derive a stable key from the
+    (secret) DATABASE_URL so sessions can't be forged with a known default."""
+    if os.getenv("SECRET_KEY"):
+        return os.environ["SECRET_KEY"]
+    if ON_VERCEL:
+        import hashlib
+        if os.getenv("DATABASE_URL"):
+            return hashlib.sha256(("tooba-session:" + os.environ["DATABASE_URL"]).encode()).hexdigest()
+        return secrets.token_hex(32)
+    return "dev-only-change-me"
+
+
+app.config["SECRET_KEY"] = _secret_key()
 ENGINE_OPTIONS = {"pool_pre_ping": True}
 if not USING_SQLITE:
     # Supabase's transaction pooler (port 6543) cannot keep prepared statements, and each
@@ -668,7 +683,7 @@ with app.app_context():
     add_missing_columns()
     # Create the first admin only when the database has no admin yet, and only from
     # ADMIN_USERNAME/ADMIN_PASSWORD. Never fall back to a built-in password on a real database.
-    admin_pw = os.getenv("ADMIN_PASSWORD") or ("ChangeThisAdminPassword123!" if USING_SQLITE else "")
+    admin_pw = os.getenv("ADMIN_PASSWORD") or ("ChangeThisAdminPassword123!" if USING_SQLITE and not ON_VERCEL else "")
     if admin_pw and not User.query.filter_by(role="Admin").first():
         admin = User(username=os.getenv("ADMIN_USERNAME", "admin"), role="Admin")
         admin.set_password(admin_pw)
