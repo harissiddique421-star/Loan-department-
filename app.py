@@ -16,7 +16,7 @@ if dburl.startswith("postgres://"): dburl=dburl.replace("postgres://","postgresq
 app.config["SQLALCHEMY_DATABASE_URI"]=dburl
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"]=False
 app.config["MAX_CONTENT_LENGTH"]=15*1024*1024
-app.config["UPLOAD_FOLDER"]=os.getenv("UPLOAD_FOLDER","private_uploads")
+app.config["UPLOAD_FOLDER"]=os.getenv("UPLOAD_FOLDER","/tmp/tooba_uploads")
 os.makedirs(app.config["UPLOAD_FOLDER"],exist_ok=True)
 db=SQLAlchemy(app)
 lm=LoginManager(app); lm.login_view="login"
