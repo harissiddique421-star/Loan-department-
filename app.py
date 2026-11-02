@@ -477,6 +477,7 @@ def delete_application(app_id):
     for d in Document.query.filter_by(application_id=a.id).all():
         delete_file(d)
         db.session.delete(d)
+    db.session.flush()   # documents must go first: document.application_id references application
     db.session.delete(a)
     db.session.commit()
     log_action("Deleted " + a.app_id)
