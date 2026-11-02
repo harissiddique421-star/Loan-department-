@@ -7,7 +7,7 @@ An online loan application system. Staff log in with a username and password, fi
 - **Form save**: every field is saved in the database (Supabase PostgreSQL), so nothing is lost on refresh or redeploy.
 - **Shared access**: any logged-in user can open, edit and update any application. Set `RESTRICT_STAFF_ACCESS=1` if Staff should only see the applications they created or are assigned to.
 - **The original 3-page Tooba form**:
-  - Typed values are printed on the scanned pages (`static/form/page1-3.png`): CNIC digit-by-digit in the 13 boxes, and the application ID in the loan-number oval.
+  - Typed values are printed on the scanned pages (`static/form/page1-3.png`): CNIC digit-by-digit in the 13 boxes. The loan-number oval is left blank; the application ID (TBF-0001…) is kept in the system only.
   - The applicant photo goes on page 1 and the two guarantor photos on page 2.
   - The preview updates live while typing.
 - **Photo & documents**: big camera photos are shrunk before upload. Other documents (PDF/JPG/PNG/WEBP/DOC/DOCX) can be attached too. Files can be downloaded or deleted.

@@ -11,8 +11,7 @@ const FORM_W = 1241, FORM_H = 1755, PAGE_COUNT = 3;
 const FONT = "'Bookman Old Style', 'Bookman', 'URW Bookman', 'URW Bookman L', Georgia, 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', serif";
 
 const FIELDS = [
-  // Page 1 — loan number oval (filled automatically with the application ID)
-  { id: '__appId',         type: 'box',  r: [866, 210, 1036, 290], fs: 34 },
+  // The loan-number oval on page 1 is left blank: the application ID is kept in the system only.
   // Page 1 — Applicant
   { id: 'amount',          type: 'box',  r: [758, 350, 1070, 410], fs: 40 },
   { id: 'name',            type: 'box',  r: [648, 541, 1108, 597], fs: 36 },
@@ -83,7 +82,6 @@ const pending = {};     // id -> Blob waiting to be uploaded
 for (let p = 1; p <= PAGE_COUNT; p++) previews[p] = document.getElementById('preview' + p);
 
 function val(id) {
-  if (id === '__appId') return PAYLOAD.appId || '';
   const el = form && form.elements[id];
   if (el) return String(el.value || '').trim();
   return String((PAYLOAD.values || {})[id] || '').trim();
