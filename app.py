@@ -138,12 +138,34 @@ def edit_application(app_id):
     docs=Document.query.filter_by(application_id=a.id).all()
     return render_template("edit_application.html",a=a,docs=docs,staff=User.query.filter_by(role="Staff",active=True).all())
 
-@app.route("/application/<int:app_id>/form")
+@app.route("/application/<int:app_id>/form",methods=["GET","POST"])
 @login_required
 def original_form(app_id):
     a=Application.query.get_or_404(app_id)
     if not allowed_app(a): abort(403)
-    return render_template("original_form.html")
+    try:
+        form_data=json.loads(a.form_json or "{}")
+    except (TypeError, ValueError):
+        form_data={}
+    if request.method=="POST":
+        form_data={k:v.strip() for k,v in request.form.items()}
+        full_name=form_data.get("full_name","").strip()
+        cnic=form_data.get("cnic","").strip()
+        if not full_name:
+            flash("Applicant ka naam zaroori hai.")
+            return render_template("original_form.html",a=a,data=form_data)
+        if cnic and Application.query.filter(Application.cnic==cnic,Application.id!=a.id).first():
+            flash("Is CNIC par doosri application mojood hai.")
+            return render_template("original_form.html",a=a,data=form_data)
+        a.applicant_name=full_name
+        a.cnic=cnic
+        a.form_json=json.dumps(form_data,ensure_ascii=False)
+        a.updated_at=datetime.utcnow()
+        db.session.commit()
+        log_action("Saved full form "+a.app_id,a.id)
+        flash("Loan form save ho gaya.")
+        return redirect(url_for("original_form",app_id=a.id))
+    return render_template("original_form.html",a=a,data=form_data)
 
 @app.route("/application/<int:app_id>/upload",methods=["POST"])
 @login_required
