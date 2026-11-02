@@ -1,0 +1,61 @@
+*{box-sizing:border-box}
+:root{--blue:#164d8d;--dark:#102b55;--bg:#f2f5fa;--line:#dfe5ee;--muted:#5d6b80;--red:#b42318}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:#17243a;font-size:15px}
+a{color:var(--blue)}
+.topbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:var(--dark);color:#fff;padding:10px 18px}
+.brand{display:flex;gap:10px;align-items:center;color:#fff;text-decoration:none;font-weight:700}
+.brand img{width:38px;height:38px;border-radius:8px}
+.brand small{display:block;font-weight:400;opacity:.8;font-size:12px}
+.topbar nav{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.topbar nav a,.linkbtn{color:#e1eaff;text-decoration:none;padding:8px 10px;border-radius:7px;background:none;border:0;font:inherit;cursor:pointer}
+.topbar nav a:hover,.linkbtn:hover{background:#ffffff1a}
+.container{max-width:1050px;margin:0 auto;padding:18px 16px 40px}
+.card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px #0000000d}
+h1{margin:6px 0 14px;font-size:24px}h2{font-size:19px;margin:0 0 12px}h3{font-size:16px}
+.flash{background:#fff4d6;padding:10px 14px;border-radius:8px;margin:0 0 12px}
+.flash.warn{background:#fde2e1}
+.btn{display:inline-block;background:var(--blue);color:#fff;padding:10px 16px;border-radius:7px;text-decoration:none;border:0;font:inherit;cursor:pointer;line-height:1.2}
+.btn.light{background:#e7eef8;color:var(--blue)}
+.btn.danger{background:var(--red)}
+.btn.small{padding:6px 10px;font-size:13px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.between{justify-content:space-between}
+.inline{display:inline}
+label{display:block;margin:12px 0 4px;font-weight:600}
+input,textarea,select{width:100%;padding:10px;border:1px solid #ccd4df;border-radius:6px;font:inherit;background:#fff}
+textarea{min-height:70px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:#fff;border-radius:10px;padding:12px 14px;text-decoration:none;color:inherit;border:2px solid transparent}
+.stat.on{border-color:var(--blue)}
+.stat b{display:block;font-size:22px;margin-top:4px}
+.overflow{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+td,th{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:13px;color:var(--muted)}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:12px;background:#e7eef8;color:var(--blue);white-space:nowrap}
+.badge.Approved,.badge.Completed{background:#dcfae6;color:#067647}
+.badge.Rejected{background:#fde2e1;color:var(--red)}
+.badge.Pending,.badge.In{background:#fef0c7;color:#93370d}
+.muted{color:var(--muted);font-size:13px}
+.photo{width:150px;height:180px;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#f5f7fa;display:block}
+.photo.empty{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;text-align:center}
+.files{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:0;list-style:none}
+.files li{border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px;word-break:break-word}
+.files img{width:100%;height:110px;object-fit:cover;border-radius:6px;display:block;margin-bottom:6px}
+.fileicon{height:110px;display:flex;align-items:center;justify-content:center;background:#f5f7fa;border-radius:6px;margin-bottom:6px;font-weight:700;color:var(--muted)}
+.kv{display:grid;grid-template-columns:180px 1fr;gap:6px 12px}
+.kv dt{color:var(--muted)}.kv dd{margin:0}
+.formsec{border-top:1px solid var(--line);margin-top:22px;padding-top:4px}
+.sticky-save{position:sticky;bottom:0;background:#fff;padding:12px 0;border-top:1px solid var(--line);margin-top:20px}
+.login{min-height:80vh;display:grid;place-items:center}
+.login .card{width:min(100%,360px);text-align:center}
+.login img{width:80px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.kv dt{margin-top:6px}}
+@media print{
+  .no-print{display:none!important}
+  body{background:#fff;font-size:12px}
+  .container{max-width:none;padding:0}
+  .card{box-shadow:none;padding:0}
+  @page{size:A4;margin:14mm}
+}
