@@ -1,0 +1,9 @@
+{# The 3 scanned pages; static/loanform.js draws the values and photos on top. #}
+{% for p in [1, 2, 3] %}
+<div class="pageTag no-print">Page {{ p }}</div>
+<div class="preview{{ ' last' if loop.last }}" id="preview{{ p }}">
+  <img class="bg" id="bgImg{{ p }}" src="{{ url_for('static', filename='form/page%d.png' % p) }}" alt="Tooba Foundation Loan Form — page {{ p }}">
+</div>
+{% endfor %}
+<script type="application/json" id="formPayload">{{ payload|tojson }}</script>
+<script src="{{ url_for('static', filename='loanform.js') }}" defer></script>

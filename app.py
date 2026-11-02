@@ -9,7 +9,8 @@ from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
-from form_fields import FORM_SECTIONS, FIELD_LABELS
+from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, PHOTO_KINDS,
+                         PHOTO_LABELS)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-only-change-me")
@@ -87,9 +88,22 @@ class Application(db.Model):
             return {}
 
     @property
-    def photo(self):
-        return (Document.query.filter_by(application_id=self.id, kind="photo")
+    def form_values(self):
+        """Saved form values, with name/CNIC filled from the record for older applications."""
+        d = self.data
+        if not d.get("name"):
+            d["name"] = d.get("full_name") or self.applicant_name or ""
+        if not d.get("cnic") and self.cnic:
+            d["cnic"] = self.cnic
+        return d
+
+    def latest_photo(self, kind):
+        return (Document.query.filter_by(application_id=self.id, kind=kind)
                 .order_by(Document.id.desc()).first())
+
+    @property
+    def photo(self):
+        return self.latest_photo("photo")
 
 
 class Document(db.Model):
@@ -140,7 +154,7 @@ def save_file(app_row, f, kind):
     ext = os.path.splitext(original)[1].lower()
     if ext not in ALLOWED_EXT:
         return None, "Sirf PDF, JPG, PNG, WEBP, DOC, DOCX allowed hain."
-    if kind == "photo" and ext not in IMAGE_EXT:
+    if kind in PHOTO_KINDS and ext not in IMAGE_EXT:
         return None, "Photo ke liye JPG, PNG ya WEBP file chunein."
     blob = f.read()
     if not blob:
@@ -223,7 +237,8 @@ def usernames():
 @app.context_processor
 def inject_globals():
     return {"STATUSES": STATUSES, "USING_SQLITE": USING_SQLITE, "ON_VERCEL": ON_VERCEL,
-            "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS}
+            "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS,
+            "PHOTO_SLOTS": PHOTO_SLOTS, "PHOTO_LABELS": PHOTO_LABELS}
 
 
 # ---------------------------------------------------------------- auth
@@ -326,55 +341,86 @@ def edit_application(app_id):
     return redirect(url_for("view_application", app_id=app_id))
 
 
+def form_payload(a):
+    """Everything static/loanform.js needs to draw the 3 scanned pages."""
+    return {"appId": a.app_id, "values": a.form_values,
+            "photos": {k: url_for("document", doc_id=p.id, inline=1)
+                       for k in PHOTO_KINDS if (p := a.latest_photo(k))}}
+
+
+def replace_photo(a, kind, f):
+    old = Document.query.filter_by(application_id=a.id, kind=kind).all()
+    doc, err = save_file(a, f, kind)
+    if not err:
+        for d in old:
+            delete_file(d)
+            db.session.delete(d)
+    return err
+
+
 @app.route("/application/<int:app_id>/form", methods=["GET", "POST"])
 @login_required
 def loan_form(app_id):
     a = get_app(app_id)
-    form_data = a.data
-    if request.method == "POST":
-        # Every named field in templates/original_form.html is saved automatically.
-        form_data = {k: v.strip() for k, v in request.form.items()
-                     if k not in ("csrf_token", "status")}
-        full_name = form_data.get("full_name", "")
-        cnic = form_data.get("cnic", "")
-        if not full_name:
-            flash("Applicant ka naam zaroori hai.")
-            return render_template("original_form.html", a=a, data=form_data)
-        if cnic and Application.query.filter(Application.cnic == cnic, Application.id != a.id).first():
-            flash("Is CNIC par doosri application pehle se mojood hai.")
-            return render_template("original_form.html", a=a, data=form_data)
-        a.applicant_name, a.cnic = full_name, cnic
-        new_status = request.form.get("status")
-        if new_status in STATUSES:
-            a.status = new_status
-        a.form_json = json.dumps(form_data, ensure_ascii=False)
-        a.updated_by = current_user.id
-        a.updated_at = datetime.utcnow()
-        photo = request.files.get("applicant_photo")
-        if photo and photo.filename:
-            _, err = save_file(a, photo, "photo")
+    if request.method == "GET":
+        return render_template("original_form.html", a=a, payload=form_payload(a))
+
+    wants_json = request.headers.get("X-Requested-With") == "fetch"
+
+    def fail(msg):
+        if wants_json:
+            return jsonify(ok=False, error=msg), 400
+        flash(msg)
+        return redirect(url_for("loan_form", app_id=a.id))
+
+    values = a.form_values
+    values.pop("full_name", None)
+    for name in FIELD_NAMES:
+        if name in request.form:
+            values[name] = request.form.get(name, "").strip()
+    for name in ("cnic", "g1cnic", "g2cnic"):
+        values[name] = "".join(ch for ch in values.get(name, "") if ch.isdigit())[:13]
+    if not values.get("name"):
+        return fail("Applicant ka naam (Name) zaroori hai.")
+    cnic = values.get("cnic", "")
+    if cnic and Application.query.filter(Application.cnic == cnic, Application.id != a.id).first():
+        return fail("Is CNIC par doosri application pehle se mojood hai.")
+
+    errors = []
+    for kind in PHOTO_KINDS:
+        f = request.files.get("photo_" + kind)
+        if f and f.filename:
+            err = replace_photo(a, kind, f)
             if err:
-                flash(err)
-        for f in request.files.getlist("documents"):
-            if f and f.filename:
-                _, err = save_file(a, f, "document")
-                if err:
-                    flash(f"{f.filename}: {err}")
-        db.session.commit()
-        log_action("Saved form " + a.app_id, a.id)
-        flash("Form save ho gaya.")
-        return redirect(url_for("view_application", app_id=a.id))
-    return render_template("original_form.html", a=a, data=form_data)
+                errors.append(f"{PHOTO_LABELS[kind]}: {err}")
+        elif request.form.get("remove_" + kind) == "1":
+            for d in Document.query.filter_by(application_id=a.id, kind=kind).all():
+                delete_file(d)
+                db.session.delete(d)
+    for f in request.files.getlist("documents"):
+        if f and f.filename:
+            _, err = save_file(a, f, "document")
+            if err:
+                errors.append(f"{f.filename}: {err}")
+
+    a.applicant_name, a.cnic = values["name"], cnic
+    if request.form.get("status") in STATUSES:
+        a.status = request.form["status"]
+    a.form_json = json.dumps(values, ensure_ascii=False)
+    a.updated_by, a.updated_at = current_user.id, datetime.utcnow()
+    db.session.commit()
+    log_action("Saved form " + a.app_id, a.id)
+    flash("Form save ho gaya." + ("" if not errors else " Lekin: " + "; ".join(errors)))
+    target = url_for("view_application", app_id=a.id)
+    return jsonify(ok=True, redirect=target) if wants_json else redirect(target)
 
 
 @app.route("/application/<int:app_id>/print")
 @login_required
 def print_application(app_id):
     a = get_app(app_id)
-    docs = Document.query.filter_by(application_id=a.id, kind="document").all()
-    log_action("Printed " + a.app_id, a.id)
-    return render_template("print.html", a=a, d=a.data, docs=docs, names=usernames(),
-                           now=datetime.utcnow())
+    log_action("Opened print " + a.app_id, a.id)
+    return render_template("print.html", a=a, payload=form_payload(a))
 
 
 @app.route("/application/<int:app_id>/status", methods=["POST"])
@@ -422,14 +468,16 @@ def delete_application(app_id):
 @login_required
 def upload(app_id):
     a = get_app(app_id)
-    kind = "photo" if request.form.get("kind") == "photo" else "document"
+    kind = request.form.get("kind") if request.form.get("kind") in PHOTO_KINDS else "document"
     files = [f for f in request.files.getlist("file") if f and f.filename]
     if not files:
         flash("File select karein.")
         return redirect(url_for("view_application", app_id=a.id))
+    if kind != "document":
+        files = files[:1]   # one picture per photo slot; it replaces the old one
     ok = 0
     for f in files:
-        _, err = save_file(a, f, kind)
+        err = replace_photo(a, kind, f) if kind != "document" else save_file(a, f, kind)[1]
         if err:
             flash(f"{f.filename}: {err}")
         else:
@@ -521,7 +569,7 @@ def reset_password(uid):
 @admin_required
 def export_csv():
     apps = Application.query.order_by(Application.id).all()
-    known = [n for _, fields in FORM_SECTIONS for n, _, _ in fields]
+    known = FIELD_NAMES
     keys = known + sorted({k for a in apps for k in a.data} - set(known))
     out = io.StringIO()
     w = csv.writer(out)
