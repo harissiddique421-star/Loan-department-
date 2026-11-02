@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{% block title %}Tooba Foundation{% endblock %} · Loan Department</title>
-<link rel="icon" href="{{ url_for('static', filename='tooba-logo.svg') }}">
+<link rel="icon" href="{{ url_for('static', filename='tooba-logo.png') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 {% block head %}{% endblock %}
@@ -12,7 +12,7 @@
 <body>
 {% if current_user.is_authenticated %}
 <header class="topbar no-print">
-  <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.svg') }}" alt=""><span>Tooba Foundation<small>Loan Department</small></span></a>
+  <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt=""><span>Tooba Foundation<small>Loan Department</small></span></a>
   <nav>
     <a href="{{ url_for('dashboard') }}">Applications</a>
     {% if current_user.role == 'Admin' %}

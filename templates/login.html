@@ -2,7 +2,7 @@
 {% block content %}
 <div class="login"><form class="card" method="post">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <img src="{{ url_for('static', filename='tooba-logo.svg') }}" alt="Tooba Foundation">
+  <img src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation">
   <h2>Tooba Foundation</h2><p class="muted">Loan Department — staff login</p>
   <input name="username" placeholder="Username" autocomplete="username" required autofocus>
   <label></label>
