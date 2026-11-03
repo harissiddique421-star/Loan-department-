@@ -195,6 +195,23 @@ tbody tr:last-child td { border-bottom: 0 }
 .badge.In { background: var(--violet-50); color: var(--violet) }
 .badge.Approved, .badge.Completed { background: var(--green-50); color: var(--green-600) }
 .badge.Rejected { background: var(--red-50); color: var(--red) }
+.badge.s-draft { background: #eef1f0; color: #56645b }
+.badge.s-submitted, .badge.s-submitted-again { background: var(--blue-50); color: var(--blue) }
+.badge.s-pending-review, .badge.s-correction-required { background: var(--amber-50); color: var(--amber) }
+.badge.s-in-review { background: var(--violet-50); color: var(--violet) }
+.badge.s-approved, .badge.s-ready-for-disbursement, .badge.s-added-to-disbursement-sheet { background: var(--green-50); color: var(--green-600) }
+.badge.s-disbursed, .badge.s-completed { background: var(--navy-50); color: var(--navy) }
+.badge.s-rejected { background: var(--red-50); color: var(--red) }
+.role.Reviewer { background: var(--violet-50); color: var(--violet) }
+.warnbox { border: 1px solid #f3d9a4; background: var(--amber-50); color: var(--amber); border-radius: 12px; padding: 10px 14px; font-weight: 600; margin: 10px 0 }
+.notes { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px }
+.notes li { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: #fff }
+.notes li.correction { border-color: #f3d9a4; background: var(--amber-50) }
+.notes li.resolved { opacity: .65 }
+.notes small { color: var(--muted); display: block; margin-top: 4px }
+.perm-table td, .perm-table th { text-align: left }
+.perm-table td.c, .perm-table th.c { text-align: center; width: 110px }
+.controls .reason { min-width: 220px }
 
 /* ---------- empty state ---------- */
 .empty { text-align: center; padding: 48px 20px; color: var(--muted) }

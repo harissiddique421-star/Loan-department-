@@ -2,4 +2,5 @@
 *.db
 private_uploads/
 __pycache__/
-*.pyc
+*.pycinstance/
+.pytest_cache/

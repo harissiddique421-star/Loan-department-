@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Deleted applications{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Deleted applications</h1>
+  <p>Delete ki gayi applications aur unki files mehfooz hain. Restore karne se wo wapas list mein aa jati hain.</p></div></div>
+<div class="card pad-0 rise" style="--i:1">
+  {% if apps %}
+  <div class="overflow"><table>
+    <thead><tr><th>Applicant</th><th>ID</th><th class="hide-sm">Deleted</th><th style="text-align:right"></th></tr></thead>
+    <tbody>
+    {% for a in apps %}
+    <tr><td><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.applicant_name or 'New applicant' }}</b></a></td>
+      <td><span class="appid">{{ a.app_id }}</span></td>
+      <td class="hide-sm muted">{{ a.deleted_at.strftime('%d %b %Y, %H:%M') }} by {{ names.get(a.deleted_by, '?') }}</td>
+      <td style="text-align:right"><form method="post" action="{{ url_for('restore_application', app_id=a.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small">{{ icon('back') }} Restore</button></form></td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <div class="empty"><div class="bubble">{{ icon('trash') }}</div><b>Koi deleted application nahi</b></div>
+  {% endif %}
+</div>
+{% endblock %}

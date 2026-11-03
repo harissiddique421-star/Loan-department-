@@ -12,7 +12,7 @@
       <div class="note">Fill the information below once. Each entry is placed in front of its own label on the form, and CNIC goes digit-by-digit into the 13 boxes. Page 2 takes the guarantor photos (signatures and thumb impressions are put by hand after printing); page 3 takes the loan details. <b>"Save Form" dabayein</b> — phir koi bhi staff isay khol kar edit ya print kar sakta hai.</div>
     </div>
     <div style="min-width:170px"><label>Status</label>
-      <select name="status">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select></div>
+      <div><span class="badge {{ a.status|slug }}">{{ a.status }}</span></div></div>
   </div>
   <div class="grid">
   {% for title, fields in FORM_SECTIONS %}

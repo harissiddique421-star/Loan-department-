@@ -21,8 +21,10 @@
     <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation"><span>Tooba Foundation<small>Loan Department</small></span></a>
     <nav class="nav">
       <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep in ('dashboard','view_application','loan_form','print_application') }}">{{ icon('grid') }}<span>Applications</span></a>
-      {% if current_user.role == 'Admin' %}
-      <a href="{{ url_for('users') }}" class="{{ 'on' if ep == 'users' }}">{{ icon('users') }}<span>Users</span></a>
+      {% if can('users.manage') %}
+      <a href="{{ url_for('users') }}" class="{{ 'on' if ep in ('users', 'permissions') }}">{{ icon('users') }}<span>Users</span></a>
+      {% endif %}
+      {% if can('reports.view') %}
       <a href="{{ url_for('reports') }}" class="{{ 'on' if ep == 'reports' }}">{{ icon('chart') }}<span>Reports</span></a>
       {% endif %}
     </nav>

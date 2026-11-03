@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Permissions{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Role permissions</h1>
+  <p>Admin ke paas hamesha saari permissions hoti hain. Yahan Staff aur Reviewer ki permissions set karein. Ye server aur database dono par lagu hoti hain.</p></div>
+  <div class="row"><a class="btn light" href="{{ url_for('users') }}">{{ icon('back') }} Users</a></div></div>
+<form class="card pad-0 rise" style="--i:1" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="overflow"><table class="perm-table">
+    <thead><tr><th>Permission</th><th class="c">Staff</th><th class="c">Reviewer</th></tr></thead>
+    <tbody>
+    {% for p in assignable %}
+    <tr><td><b>{{ labels[p] }}</b><br><small class="muted mono">{{ p }}</small></td>
+      {% for role in ('Staff', 'Reviewer') %}<td class="c"><input type="checkbox" name="{{ role }}" value="{{ p }}" aria-label="{{ role }} {{ p }}" {{ 'checked' if p in current[role] }}></td>{% endfor %}</tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <p style="padding:16px;margin:0"><button class="btn">{{ icon('check') }} Save permissions</button></p>
+</form>
+{% endblock %}
