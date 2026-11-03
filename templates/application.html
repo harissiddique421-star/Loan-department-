@@ -3,7 +3,7 @@
 {% set d = a.form_values %}
 <div class="page-head rise">
   <div>
-    <a class="muted" href="{{ url_for('dashboard') }}">{{ icon('back') }} Applications</a>
+    <a class="muted" href="{{ url_for(portal.list) }}">{{ icon('back') }} Applications</a>
   </div>
   <div class="row">
     {% if editable %}<a class="btn" href="{{ url_for('loan_form', app_id=a.id) }}">{{ icon('edit') }} Edit Form</a>{% endif %}
@@ -30,6 +30,7 @@
       <div class="title-line"><h1>{{ a.applicant_name or 'New applicant' }}</h1><span class="badge {{ a.status|slug }}">{{ a.status }}</span></div>
       <div class="meta"><span class="appid">{{ a.app_id }}</span>{% if a.loan_number %} · Loan No. <b>{{ a.loan_number }}</b>{% endif %} · Created {{ a.created_at.strftime('%d %b %Y, %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}{% if a.updated_by %} · Last updated {{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }} by {{ names.get(a.updated_by, '?') }}{% endif %}
         {% if a.reviewer_id %} · Reviewer: <b>{{ names.get(a.reviewer_id, '?') }}</b>{% endif %}</div>
+      {% if current_user.role == 'Reviewer' and a.reviewer_id != current_user.id %}<div class="warnbox">Ye application aapko assigned nahi.</div>{% endif %}
       {% if a.status == 'Rejected' and a.rejection_reason %}<div class="warnbox">Rejection reason: {{ a.rejection_reason }}</div>{% endif %}
       <div class="facts">
         <div class="fact">{{ icon('user') }}<div><small>Father / Husband</small><span>{{ d.get('father') or '—' }}</span></div></div>

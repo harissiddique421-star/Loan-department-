@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% from "_app_table.html" import app_table %}{% block title %}Admin Dashboard{% endblock %}
+{% block content %}
+<section class="hero rise">
+  <div class="hero-in">
+    <div class="urdu" lang="ur" dir="rtl">السلام علیکم</div>
+    <h1>Admin Panel</h1>
+    <p>{{ total }} applications · {{ users_by_role['Staff'] }} staff · {{ users_by_role['Reviewer'] }} reviewers. Naye submit hone wali applications ko reviewer assign karein.</p>
+  </div>
+  <a class="btn hero-in" href="{{ url_for('users') }}">{{ icon('users') }} Staff &amp; Reviewers</a>
+</section>
+
+<div class="kpis">
+  {% for s in ['Submitted', 'Pending Review', 'In Review', 'Correction Required', 'Approved', 'Rejected'] %}
+  <a class="kpi rise" style="--i:{{ loop.index }}" href="{{ url_for('admin_applications', status=s) }}"><small>{{ s }}</small><b>{{ counts[s] }}</b></a>
+  {% endfor %}
+</div>
+
+<div class="two">
+  <section class="card rise" style="--i:2">
+    <div class="card-head"><h2>{{ icon('users') }} Assign karna hai</h2><span class="muted">{{ queue|length }}</span></div>
+    {% if queue %}
+    <ul class="mini">{% for a in queue %}
+      <li><span><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.applicant_name or 'New applicant' }}</b></a><span class="sub">{{ a.app_id }} · {{ a.status }}{% if a.reviewer_id %} · {{ names.get(a.reviewer_id) }}{% endif %}</span></span>
+        <a class="btn small light" href="{{ url_for('view_application', app_id=a.id) }}">Assign</a></li>
+    {% endfor %}</ul>
+    {% else %}<p class="muted">Koi application assignment ke intezar mein nahi.</p>{% endif %}
+  </section>
+  <section class="card rise" style="--i:3">
+    <div class="card-head"><h2>{{ icon('clock') }} Taaza activity</h2><a class="muted" href="{{ url_for('audit_log') }}">Poora audit log</a></div>
+    <ul class="mini">{% for h in recent_audit %}
+      <li><span><b>{{ h.actor_name or 'System' }}</b> — {{ ACTION_LABELS.get(h.action, h.action) }}<span class="sub">{{ h.created_at.strftime('%d %b %Y, %H:%M') }}{% if h.reason %} · {{ h.reason }}{% endif %}</span></span></li>
+    {% else %}<li class="muted">Abhi koi activity nahi.</li>{% endfor %}</ul>
+  </section>
+</div>
+
+<div class="card pad-0 rise" style="--i:4">
+  <div class="card-head" style="padding:16px 20px 0"><h2>{{ icon('files') }} Haal hi mein update hui applications</h2><a class="muted" href="{{ url_for('admin_applications') }}">Sab dekhein</a></div>
+  {{ app_table(recent, names) }}
+</div>
+{% endblock %}

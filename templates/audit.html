@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Audit Log{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Audit Log</h1><p>Har ahem kaam ka record. Ye record na badla ja sakta hai na mitaya ja sakta hai.</p></div></div>
+<div class="card pad-0 rise" style="--i:1">
+  <form class="toolbar" method="get">
+    <select name="action" aria-label="Action"><option value="">Sab actions</option>{% for k, v in ACTION_LABELS.items() %}<option value="{{ k }}" {{ 'selected' if action == k }}>{{ v }}</option>{% endfor %}</select>
+    <input name="actor" value="{{ actor }}" placeholder="User" aria-label="User">
+    <input name="app" value="{{ app_ref }}" placeholder="Application ID / Loan No." aria-label="Application">
+    <button class="btn navy">{{ icon('search') }} Filter</button>
+    {% if action or actor or app_ref %}<a class="btn light" href="{{ url_for('audit_log') }}">{{ icon('x') }} Clear</a>{% endif %}
+  </form>
+  <div class="overflow"><table>
+    <thead><tr><th>Waqt</th><th>User</th><th>Action</th><th>Application</th><th class="hide-sm">Pehle</th><th class="hide-sm">Baad</th><th class="hide-sm">Wajah</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr><td class="muted">{{ r.created_at.strftime('%d %b %Y, %H:%M') }}</td>
+      <td><b>{{ r.actor_name or 'System' }}</b></td>
+      <td>{{ ACTION_LABELS.get(r.action, r.action) }}</td>
+      <td>{% if r.application_id %}<a class="appid" href="{{ url_for('view_application', app_id=r.application_id) }}">{{ app_ids.get(r.application_id, '#' ~ r.application_id) }}</a>{% else %}—{% endif %}</td>
+      <td class="hide-sm"><div class="json">{{ r.old_value|tojson if r.old_value else '—' }}</div></td>
+      <td class="hide-sm"><div class="json">{{ r.new_value|tojson if r.new_value else '—' }}</div></td>
+      <td class="hide-sm">{{ r.reason or '' }}</td></tr>
+    {% else %}<tr><td colspan="7" class="muted">Koi record nahi mila.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</div>
+<div class="row">
+  {% if page > 1 %}<a class="btn light small" href="{{ url_for('audit_log', action=action, actor=actor, app=app_ref, page=page-1) }}">{{ icon('back') }} Pichla</a>{% endif %}
+  {% if more %}<a class="btn light small" href="{{ url_for('audit_log', action=action, actor=actor, app=app_ref, page=page+1) }}">Agla {{ icon('arrow') }}</a>{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Settings</h1>
+  <p>Fee aur purpose categories. Badalne se purani applications par asar nahi parta — har application us waqt ki fee aur purpose apne saath mehfooz rakhti hai.</p></div></div>
+<div class="two">
+<section class="card rise" style="--i:1">
+  <div class="card-head"><h2>{{ icon('cash') }} Form fee categories</h2></div>
+  <ul class="mini">{% for f in fees %}
+    <li><form class="settings-row" method="post" action="{{ url_for('save_fee', fid=f.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="name" value="{{ f.name }}" aria-label="Name" maxlength="80">
+      <input class="num" name="loan_amount" value="{{ '%d'|format(f.loan_amount) if f.loan_amount is not none }}" placeholder="Loan" aria-label="Loan amount" inputmode="numeric">
+      <input class="num" name="fee_amount" value="{{ '%d'|format(f.fee_amount) }}" aria-label="Fee amount" inputmode="numeric" required>
+      <label class="muted"><input type="checkbox" name="active" value="1" {{ 'checked' if f.active }}> Active</label>
+      <button class="btn small light">Save</button></form></li>
+  {% endfor %}</ul>
+  <form class="settings-row" method="post" action="{{ url_for('save_fee') }}" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="name" placeholder="Naam (e.g. Loan 60,000)" required maxlength="80" aria-label="New fee name">
+    <input class="num" name="loan_amount" placeholder="Loan" inputmode="numeric" aria-label="Loan amount">
+    <input class="num" name="fee_amount" placeholder="Fee" inputmode="numeric" required aria-label="Fee amount">
+    <button class="btn small">{{ icon('plus') }} Add</button></form>
+</section>
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('store') }} Loan purpose categories</h2></div>
+  <ul class="mini">{% for p in purposes %}
+    <li><form class="settings-row" method="post" action="{{ url_for('save_purpose', pid=p.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="name" value="{{ p.name }}" aria-label="Name" maxlength="80">
+      <label class="muted"><input type="checkbox" name="active" value="1" {{ 'checked' if p.active }}> Active</label>
+      <button class="btn small light">Save</button></form></li>
+  {% endfor %}</ul>
+  <form class="settings-row" method="post" action="{{ url_for('save_purpose') }}" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="name" placeholder="Naya purpose" required maxlength="80" aria-label="New purpose">
+    <button class="btn small">{{ icon('plus') }} Add</button></form>
+</section>
+</div>
+{% endblock %}

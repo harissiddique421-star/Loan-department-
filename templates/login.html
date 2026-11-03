@@ -1,32 +1,20 @@
-{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Login{% endblock %}
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}{{ info.login }}{% endblock %}
 {% block page %}
 <div class="auth">
-  <aside class="auth-side">
-    <div class="rings" aria-hidden="true"><span></span><span></span><span></span></div>
-    <div class="auth-brand"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt=""><div><b>The Tooba Foundation</b><small>Loan Department</small></div></div>
-    <div class="auth-copy">
-      <p class="urdu" lang="ur" dir="rtl">بلاسود چھوٹے قرضوں کا فلاحی ادارہ</p>
-      <h2>Har qarza, ek jagah, mehfooz.</h2>
-      <p>Loan form bharein, photos lagayein, aur poori team ek hi record par kaam kare.</p>
-      <ul class="auth-points">
-        <li>{{ icon('file') }} Asal 3-page Tooba form, print aur PDF</li>
-        <li>{{ icon('users') }} Har staff ka apna login aur history</li>
-        <li>{{ icon('shield') }} Data Supabase mein mehfooz</li>
-      </ul>
-    </div>
-    <div class="auth-foot">Regd# 0052 · Orangi Town, Karachi</div>
-  </aside>
+{% include "_auth_side.html" %}
   <main class="auth-main">
-    <form class="auth-card" method="post">
+    <form class="auth-card portal-{{ portal_key }}" method="post" action="{{ url_for('login_portal', portal=portal_key) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <img class="logo-sm" src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation">
-      <h1>Khush aamdeed</h1>
-      <p class="sub">Apne staff account se login karein</p>
+      <span class="section-tag">{{ info.title }}</span>
+      <h1>{{ info.login }}</h1>
+      <p class="sub">{{ info.blurb }}</p>
       <label for="username">Username</label>
       <div class="field-icon">{{ icon('user') }}<input id="username" name="username" autocomplete="username" required autofocus></div>
       <label for="password">Password</label>
       <div class="pw field-icon">{{ icon('key') }}<input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" data-toggle-pw="password" aria-label="Password dikhayein">{{ icon('eye') }}</button></div>
       <button class="btn" type="submit">Login {{ icon('arrow') }}</button>
+      <a class="switch" href="{{ url_for('login') }}">{{ icon('back') }} Doosra section chunein</a>
     </form>
   </main>
 </div>

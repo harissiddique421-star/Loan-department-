@@ -14,30 +14,30 @@
 {% block head %}{% endblock %}
 </head>
 <body class="{% block body_class %}{% endblock %}">
-{% if current_user.is_authenticated %}
 {% set ep = request.endpoint or '' %}
-<header class="topbar no-print">
-  <div class="topbar-in">
-    <a class="brand" href="{{ url_for('dashboard') }}"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation"><span>Tooba Foundation<small>Loan Department</small></span></a>
-    <nav class="nav">
-      <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep in ('dashboard','view_application','loan_form','print_application') }}">{{ icon('grid') }}<span>Applications</span></a>
-      {% if can('users.manage') %}
-      <a href="{{ url_for('users') }}" class="{{ 'on' if ep in ('users', 'permissions') }}">{{ icon('users') }}<span>Users</span></a>
-      {% endif %}
-      {% if can('reports.view') %}
-      <a href="{{ url_for('reports') }}" class="{{ 'on' if ep == 'reports' }}">{{ icon('chart') }}<span>Reports</span></a>
-      {% endif %}
-    </nav>
-    <div class="me">
-      <a class="chip" href="{{ url_for('change_password') }}" title="Password badlein"><span class="av">{{ current_user.username[:1]|upper }}</span><span class="nm">{{ current_user.username }}<small>{{ current_user.role }}</small></span></a>
-      <form method="post" action="{{ url_for('logout') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="iconbtn" title="Logout" aria-label="Logout">{{ icon('logout') }}</button></form>
-    </div>
+{% if current_user.is_authenticated and portal %}
+<div class="shell" data-portal="{{ portal_key }}">
+<aside class="side no-print" aria-label="{{ portal.title }} menu">
+  <a class="brand" href="{{ url_for(portal.home) }}"><img src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation"><span>Tooba Foundation<small>Loan Department</small></span></a>
+  <div class="portal-pill">{{ icon('shield') }} {{ portal.title }}</div>
+  <nav class="side-nav">
+    {% for endpoint, label, ic, also in nav %}
+    <a href="{{ url_for(endpoint) }}" class="{{ 'on' if ep == endpoint or ep in also }}">{{ icon(ic) }}<span>{{ label }}</span></a>
+    {% endfor %}
+    {% if portal_key == 'staff' and can('app.create') %}
+    <form method="post" action="{{ url_for('new_application') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="side-new">{{ icon('plus') }}<span>New Application</span></button></form>
+    {% endif %}
+  </nav>
+  <div class="side-foot">
+    <a class="chip" href="{{ url_for('change_password') }}" title="Password badlein"><span class="av">{{ current_user.username[:1]|upper }}</span><span class="nm">{{ current_user.display }}<small>{{ current_user.role }} · password</small></span></a>
+    <form method="post" action="{{ url_for('logout') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="iconbtn" title="Logout" aria-label="Logout">{{ icon('logout') }}</button></form>
   </div>
-</header>
+</aside>
+<div class="shell-main">
 {% endif %}
 {% with msgs = get_flashed_messages() %}{% if msgs %}
 <div class="toasts no-print" role="status">
-  {% for m in msgs %}<div class="toast{{ ' warn' if ('nahi' in m or 'ghalat' in m or 'zaroori' in m or 'Lekin' in m) }}">{{ icon('check') }}<span>{{ m }}</span><button type="button" aria-label="Band karein" data-dismiss>×</button></div>{% endfor %}
+  {% for m in msgs %}<div class="toast{{ ' warn' if ('nahi' in m or 'ghalat' in m or 'zaroori' in m or 'Lekin' in m or 'Dhyan' in m) }}">{{ icon('check') }}<span>{{ m }}</span><button type="button" aria-label="Band karein" data-dismiss>×</button></div>{% endfor %}
 </div>
 {% endif %}{% endwith %}
 {% block page %}
@@ -48,5 +48,6 @@
   {% block content %}{% endblock %}
 </main>
 {% endblock %}
+{% if current_user.is_authenticated and portal %}</div></div>{% endif %}
 </body>
 </html>

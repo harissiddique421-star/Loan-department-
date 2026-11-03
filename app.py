@@ -2,7 +2,7 @@ import os, json, secrets, csv, io, hashlib
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
-                   send_file, Response, jsonify, g, has_request_context)
+                   send_file, Response, jsonify, g, has_request_context, session)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
@@ -107,7 +107,25 @@ PERMISSIONS = {
     "users.manage": "Users, roles aur permissions manage karna",
     "app.purge": "Application hamesha ke liye mitana",
 }
-ADMIN_ONLY = {"users.manage", "app.purge"}          # never assignable to Staff/Reviewer
+# Admin-section powers are never assignable to Staff/Reviewer (their pages live under /admin).
+ADMIN_ONLY = {"users.manage", "app.purge", "app.delete", "app.restore", "app.assign", "reports.view",
+              "export", "audit.view", "settings.manage", "period.close", "gsheets.manage"}
+
+# Three separate sections of the same site. One login system (the `user` table), one role
+# per account; each role has its own login page, dashboard, menu and URL area.
+PORTALS = {"admin": "Admin", "reviewer": "Reviewer", "staff": "Staff"}
+SECTION_OF_ROLE = {v: k for k, v in PORTALS.items()}
+PORTAL_INFO = {
+    "Admin": {"title": "Admin Panel", "login": "Admin Login", "home": "admin_dashboard",
+              "list": "admin_applications",
+              "blurb": "Users, permissions, saari applications, reports, audit log aur settings."},
+    "Reviewer": {"title": "Reviewer Desk", "login": "Reviewer Login", "home": "reviewer_dashboard",
+                 "list": "reviewer_applications",
+                 "blurb": "Assigned applications ka review, corrections, approve / reject."},
+    "Staff": {"title": "Staff Desk", "login": "Staff Login", "home": "staff_dashboard",
+              "list": "staff_applications",
+              "blurb": "Nayi application, draft, documents upload aur review ke liye submit."},
+}
 # Same defaults as the Phase 3 migration (tests check they match).
 DEFAULT_ROLE_PERMS = {
     "Staff": {"app.create", "app.edit_own", "app.view_all", "app.submit", "doc.upload"},
@@ -156,6 +174,10 @@ ACTION_LABELS = {
     "permissions.changed": "Permissions badlin",
     "export.csv": "CSV export kiya",
     "export.backup": "Backup download kiya",
+    "settings.purpose_added": "Purpose category add ki",
+    "settings.purpose_changed": "Purpose category badli",
+    "settings.fee_added": "Fee category add ki",
+    "settings.fee_changed": "Fee category badli",
 }
 
 ALLOWED_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx"}
@@ -605,12 +627,36 @@ def slug(s):
     return "s-" + "".join(ch if ch.isalnum() else "-" for ch in (s or "")).lower()
 
 
+def nav_items(role):
+    """Each role gets its own menu; no role ever sees another role's links."""
+    if role == "Admin":
+        return [("admin_dashboard", "Dashboard", "grid", ()),
+                ("admin_applications", "Applications", "files",
+                 ("view_application", "loan_form", "print_application")),
+                ("users", "Staff & Reviewers", "users", ()),
+                ("permissions", "Permissions", "key", ()),
+                ("admin_settings", "Settings", "database", ()),
+                ("reports", "Reports", "chart", ()),
+                ("audit_log", "Audit Log", "clock", ()),
+                ("deleted_applications", "Deleted", "trash", ())]
+    if role == "Reviewer":
+        return [("reviewer_dashboard", "Dashboard", "grid", ()),
+                ("reviewer_applications", "Assigned Applications", "files",
+                 ("view_application", "print_application"))]
+    return [("staff_dashboard", "Dashboard", "grid", ()),
+            ("staff_applications", "My Applications", "files",
+             ("view_application", "loan_form", "print_application"))]
+
+
 @app.context_processor
 def inject_globals():
+    role = current_user.role if current_user and current_user.is_authenticated else None
     return {"STATUSES": STATUSES, "USING_SQLITE": USING_SQLITE, "ON_VERCEL": ON_VERCEL,
             "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS,
             "PHOTO_SLOTS": PHOTO_SLOTS, "PHOTO_LABELS": PHOTO_LABELS, "can": can,
-            "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES}
+            "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES, "PORTAL_INFO": PORTAL_INFO,
+            "portal": PORTAL_INFO.get(role), "portal_key": SECTION_OF_ROLE.get(role),
+            "nav": nav_items(role) if role else []}
 
 
 MIGRATION_PENDING = False
@@ -623,36 +669,82 @@ def migration_gate():
                                msg="Database ka naya update abhi apply nahi hua. Admin se rabta karein."), 503
 
 
+SECTION_PREFIX = {"/admin": "Admin", "/reviewer": "Reviewer", "/staff": "Staff"}
+
+
+@app.before_request
+def section_gate():
+    """Keep the three sections apart on the server, whatever URL is typed in."""
+    if request.endpoint in (None, "static"):
+        return None
+    if current_user.is_authenticated and session.get("portal") != current_user.role:
+        # role changed by Admin, or session from before sections existed: log in again
+        logout_user()
+        session.pop("portal", None)
+        flash("Dobara login karein.")
+        return redirect(url_for("login"))
+    for prefix, role in SECTION_PREFIX.items():
+        if request.path == prefix or request.path.startswith(prefix + "/"):
+            if not current_user.is_authenticated:
+                return redirect(url_for("login_portal", portal=SECTION_OF_ROLE[role]))
+            if current_user.role != role:
+                abort(403)
+    return None
+
+
 # ---------------------------------------------------------------- auth
+def home_url():
+    return url_for(PORTAL_INFO[current_user.role]["home"])
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    """Entry page with the three separate sections."""
     if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
+        return redirect(home_url())
+    return render_template("login_choose.html")
+
+
+@app.route("/login/<portal>", methods=["GET", "POST"])
+def login_portal(portal):
+    role = PORTALS.get(portal)
+    if not role:
+        abort(404)
+    if current_user.is_authenticated:
+        return redirect(home_url())
+    info = PORTAL_INFO[role]
     if request.method == "POST":
         username = request.form.get("username", "").strip()[:80]
         ip = client_ip()
         if login_blocked(username, ip):
             flash(f"Bohat zyada ghalat koshishein. {int(LOGIN_WINDOW.total_seconds() // 60)} minute baad try karein.")
-            return render_template("login.html"), 429
+            return render_template("login.html", portal_key=portal, info=info), 429
         u = User.query.filter_by(username=username).first()
         password = request.form.get("password", "")
         # Always run one hash check so response time doesn't reveal which usernames exist.
         ok = u.check_password(password) if u else (check_password_hash(_DUMMY_HASH, password) and False)
         if u and u.active and not u.deleted_at and ok:
+            if u.role != role:
+                log_security(f"LOGIN_WRONG_SECTION user={username[:60]} section={portal} ip={ip}", user_id=u.id)
+                flash(f"Ye account {info['title']} ka nahi hai. Apne section ka login istemal karein.")
+                return render_template("login.html", portal_key=portal, info=info), 403
             login_user(u)
+            session["portal"] = u.role
             set_db_actor(u)
-            log_security("Login ip=" + ip, user_id=u.id)
-            return redirect(url_for("dashboard"))
+            log_security(f"Login section={portal} ip={ip}", user_id=u.id)
+            return redirect(url_for(info["home"]))
         log_security(f"LOGIN_FAIL user={username[:60]} ip={ip}", user_id=u.id if u else None)
         flash("Username ya password ghalat hai, ya account disabled hai.")
-    return render_template("login.html")
+    return render_template("login.html", portal_key=portal, info=info)
 
 
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
+    section = SECTION_OF_ROLE.get(current_user.role, "staff")
     logout_user()
-    return redirect(url_for("login"))
+    session.pop("portal", None)
+    return redirect(url_for("login_portal", portal=section))
 
 
 @app.route("/account/password", methods=["GET", "POST"])
@@ -671,8 +763,9 @@ def change_password():
             audit("user.password_changed", entity="user", entity_id=me.id)
             db.session.commit()
             login_user(me)   # keep this session; all other sessions are now logged out
+            session["portal"] = me.role
             flash("Password change ho gaya.")
-            return redirect(url_for("dashboard"))
+            return redirect(home_url())
     return render_template("change_password.html")
 
 
@@ -680,25 +773,126 @@ def change_password():
 @app.route("/")
 @login_required
 def dashboard():
+    """Old address: sends each user to their own section."""
+    return redirect(home_url())
+
+
+def search(query, q):
+    if not q:
+        return query
+    like = f"%{q}%"
+    digits = "".join(ch for ch in q if ch.isdigit())
+    conds = [Application.applicant_name.ilike(like), Application.app_id.ilike(like),
+             Application.loan_number.ilike(like), Application.cnic.ilike(like)]
+    if digits and digits != q:
+        conds.append(Application.cnic.ilike(f"%{digits}%"))   # "42501-1470957-1" finds stored digits
+    return query.filter(or_(*conds))
+
+
+def list_page(base, title, eyebrow, endpoint, **extra):
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
-    base = visible_apps().filter(Application.deleted_at.is_(None))
     counts = {s: base.filter(Application.status == s).count() for s in STATUSES}
     total = base.count()
-    query = base
-    if q:
-        like = f"%{q}%"
-        digits = "".join(ch for ch in q if ch.isdigit())
-        conds = [Application.applicant_name.ilike(like), Application.app_id.ilike(like),
-                 Application.loan_number.ilike(like), Application.cnic.ilike(like)]
-        if digits and digits != q:
-            conds.append(Application.cnic.ilike(f"%{digits}%"))   # "42501-1470957-1" finds stored digits
-        query = query.filter(or_(*conds))
+    query = search(base, q)
     if status:
         query = query.filter(Application.status == status)
     apps = query.order_by(Application.updated_at.desc()).limit(200).all()
-    return render_template("dashboard.html", apps=apps, total=total, counts=counts, q=q,
-                           status=status, names=usernames())
+    return render_template("applications.html", apps=apps, total=total, counts=counts, q=q, status=status,
+                           names=usernames(), title=title, eyebrow=eyebrow, list_endpoint=endpoint,
+                           extra_args={k: v for k, v in extra.items() if k.startswith("arg_")}, **extra)
+
+
+def live(query):
+    return query.filter(Application.deleted_at.is_(None))
+
+
+# ------------------------------- Admin section
+@app.route("/admin")
+@login_required
+def admin_dashboard():
+    base = live(Application.query)
+    counts = {s: base.filter(Application.status == s).count() for s in STATUSES}
+    queue = (base.filter(or_(Application.status.in_(["Submitted", "Submitted Again"]),
+                             (Application.status == "Pending Review") & Application.reviewer_id.is_(None)))
+             .order_by(Application.updated_at.desc()).limit(20).all())
+    users_by_role = {r: User.query.filter(User.role == r, User.active.is_(True)).count() for r in ROLES}
+    recent_audit = AuditLog.query.order_by(AuditLog.id.desc()).limit(12).all()
+    recent = base.order_by(Application.updated_at.desc()).limit(8).all()
+    return render_template("admin_dashboard.html", counts=counts, total=base.count(), queue=queue,
+                           users_by_role=users_by_role, recent_audit=recent_audit, recent=recent,
+                           names=usernames())
+
+
+@app.route("/admin/applications")
+@login_required
+def admin_applications():
+    return list_page(live(visible_apps()), "Saari applications", "Admin", "admin_applications",
+                     show_new=can("app.create"), show_tools=True)
+
+
+# ------------------------------- Reviewer section
+def assigned_to_me():
+    return live(Application.query.filter(Application.reviewer_id == current_user.id))
+
+
+@app.route("/reviewer")
+@login_required
+def reviewer_dashboard():
+    base = assigned_to_me()
+    waiting = (base.filter(Application.status.in_(["Submitted", "Pending Review", "Submitted Again"]))
+               .order_by(Application.updated_at).all())
+    in_review = base.filter(Application.status == "In Review").order_by(Application.updated_at).all()
+    stats = {"assigned": base.count(), "waiting": len(waiting), "in_review": len(in_review),
+             "correction": base.filter(Application.status == "Correction Required").count(),
+             "approved": base.filter(Application.approved_by == current_user.id).count(),
+             "rejected": base.filter(Application.status == "Rejected").count()}
+    return render_template("reviewer_dashboard.html", waiting=waiting, in_review=in_review, stats=stats,
+                           names=usernames())
+
+
+@app.route("/reviewer/applications")
+@login_required
+def reviewer_applications():
+    return list_page(assigned_to_me(), "Mujhe assigned applications", "Reviewer", "reviewer_applications")
+
+
+# ------------------------------- Staff section
+def my_apps():
+    uid = current_user.id
+    return live(Application.query.filter(or_(Application.created_by == uid, Application.assigned_to == uid)))
+
+
+@app.route("/staff")
+@login_required
+def staff_dashboard():
+    base = my_apps()
+    corrections = base.filter(Application.status == "Correction Required").order_by(Application.updated_at).all()
+    open_notes = {}
+    for a in corrections:
+        n = (ReviewNote.query.filter_by(application_id=a.id, kind="correction", resolved_at=None)
+             .order_by(ReviewNote.id.desc()).first())
+        open_notes[a.id] = n.body if n else ""
+    drafts = base.filter(Application.status == "Draft").order_by(Application.updated_at.desc()).all()
+    progress = ["Submitted", "Pending Review", "In Review", "Submitted Again"]
+    done = ["Approved", "Ready for Disbursement", "Added to Disbursement Sheet", "Disbursed", "Completed"]
+    stats = {"total": base.count(), "drafts": len(drafts), "corrections": len(corrections),
+             "progress": base.filter(Application.status.in_(progress)).count(),
+             "approved": base.filter(Application.status.in_(done)).count(),
+             "rejected": base.filter(Application.status == "Rejected").count()}
+    recent = base.order_by(Application.updated_at.desc()).limit(10).all()
+    return render_template("staff_dashboard.html", corrections=corrections, open_notes=open_notes,
+                           drafts=drafts, stats=stats, recent=recent, names=usernames())
+
+
+@app.route("/staff/applications")
+@login_required
+def staff_applications():
+    scope = "all" if request.args.get("scope") == "all" and can("app.view_all") else "mine"
+    base = live(visible_apps()) if scope == "all" else my_apps()
+    title = "Saari applications (search)" if scope == "all" else "Meri applications"
+    return list_page(base, title, "Staff", "staff_applications", show_new=can("app.create"),
+                     scope=scope, arg_scope=scope)
 
 
 @app.route("/application/new", methods=["POST", "GET"])
@@ -981,7 +1175,7 @@ def delete_application(app_id):
     audit("application.deleted", a, reason=request.form.get("reason", "").strip() or None)
     db.session.commit()
     flash(a.app_id + " delete ho gayi (Admin isse 'Deleted' list se wapas la sakta hai).")
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("admin_applications"))
 
 
 @app.route("/admin/deleted")
@@ -1168,6 +1362,108 @@ def permissions():
         flash("Permissions save ho gayin.")
         return redirect(url_for("permissions"))
     return render_template("permissions.html", assignable=assignable, current=current, labels=PERMISSIONS)
+
+
+@app.route("/admin/settings")
+@requires("settings.manage")
+def admin_settings():
+    return render_template("settings.html",
+                           purposes=PurposeCategory.query.order_by(PurposeCategory.sort_order, PurposeCategory.id).all(),
+                           fees=FeeCategory.query.order_by(FeeCategory.sort_order, FeeCategory.id).all())
+
+
+def _money(v):
+    try:
+        x = float(str(v).replace(",", "").strip())
+        return x if x >= 0 else None
+    except ValueError:
+        return None
+
+
+@app.route("/admin/settings/purpose", methods=["POST"])
+@app.route("/admin/settings/purpose/<int:pid>", methods=["POST"])
+@requires("settings.manage")
+def save_purpose(pid=None):
+    name = request.form.get("name", "").strip()[:80]
+    if not name:
+        flash("Naam zaroori hai.")
+        return redirect(url_for("admin_settings"))
+    clash = PurposeCategory.query.filter(PurposeCategory.name == name, PurposeCategory.id != (pid or 0)).first()
+    if clash:
+        flash(f"'{name}' pehle se mojood hai.")
+        return redirect(url_for("admin_settings"))
+    if pid:
+        p = db.get_or_404(PurposeCategory, pid)
+        old = {"name": p.name, "active": p.active}
+        p.name, p.active = name, request.form.get("active") == "1"
+        audit("settings.purpose_changed", entity="purpose_category", entity_id=p.id, old=old,
+              new={"name": p.name, "active": p.active})
+    else:
+        top = db.session.query(db.func.max(PurposeCategory.sort_order)).scalar() or 0
+        p = PurposeCategory(name=name, sort_order=top + 1)
+        db.session.add(p)
+        db.session.flush()
+        audit("settings.purpose_added", entity="purpose_category", entity_id=p.id, new={"name": name})
+    db.session.commit()
+    flash("Purpose save ho gaya. Purani applications par likha purpose nahi badalta.")
+    return redirect(url_for("admin_settings"))
+
+
+@app.route("/admin/settings/fee", methods=["POST"])
+@app.route("/admin/settings/fee/<int:fid>", methods=["POST"])
+@requires("settings.manage")
+def save_fee(fid=None):
+    name = request.form.get("name", "").strip()[:80]
+    fee = _money(request.form.get("fee_amount", ""))
+    loan = _money(request.form.get("loan_amount", "")) if request.form.get("loan_amount", "").strip() else None
+    if not name or fee is None:
+        flash("Naam aur sahih fee amount zaroori hai.")
+        return redirect(url_for("admin_settings"))
+    clash = FeeCategory.query.filter(FeeCategory.name == name, FeeCategory.id != (fid or 0)).first()
+    if clash:
+        flash(f"'{name}' pehle se mojood hai.")
+        return redirect(url_for("admin_settings"))
+    if fid:
+        f = db.get_or_404(FeeCategory, fid)
+        old = {"name": f.name, "loan_amount": float(f.loan_amount) if f.loan_amount is not None else None,
+               "fee_amount": float(f.fee_amount), "active": f.active}
+        f.name, f.loan_amount, f.fee_amount = name, loan, fee
+        f.active = request.form.get("active") == "1"
+        audit("settings.fee_changed", entity="fee_category", entity_id=f.id, old=old,
+              new={"name": name, "loan_amount": loan, "fee_amount": fee, "active": f.active})
+    else:
+        top = db.session.query(db.func.max(FeeCategory.sort_order)).scalar() or 0
+        f = FeeCategory(name=name, loan_amount=loan, fee_amount=fee, sort_order=top + 1)
+        db.session.add(f)
+        db.session.flush()
+        audit("settings.fee_added", entity="fee_category", entity_id=f.id,
+              new={"name": name, "loan_amount": loan, "fee_amount": fee})
+    db.session.commit()
+    flash("Fee category save ho gayi. Purani applications ki fee wahi rehti hai jo us waqt lagi thi.")
+    return redirect(url_for("admin_settings"))
+
+
+@app.route("/admin/audit")
+@requires("audit.view")
+def audit_log():
+    q = AuditLog.query
+    action = request.args.get("action", "").strip()
+    actor = request.args.get("actor", "").strip()
+    app_ref = request.args.get("app", "").strip()
+    if action:
+        q = q.filter(AuditLog.action == action)
+    if actor:
+        q = q.filter(AuditLog.actor_name.ilike(f"%{actor}%"))
+    if app_ref:
+        ids = [a.id for a in Application.query.filter(or_(Application.app_id.ilike(f"%{app_ref}%"),
+                                                           Application.loan_number.ilike(f"%{app_ref}%")))]
+        q = q.filter(AuditLog.application_id.in_(ids or [-1]))
+    page = max(1, request.args.get("page", 1, type=int))
+    rows = q.order_by(AuditLog.id.desc()).offset((page - 1) * 100).limit(101).all()
+    app_ids = {a.id: a.app_id for a in Application.query.filter(
+        Application.id.in_({r.application_id for r in rows if r.application_id} or {-1}))}
+    return render_template("audit.html", rows=rows[:100], more=len(rows) > 100, page=page, app_ids=app_ids,
+                           action=action, actor=actor, app_ref=app_ref)
 
 
 @app.route("/admin/export")

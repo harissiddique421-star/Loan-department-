@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% from "_app_table.html" import app_table %}{% block title %}Staff Dashboard{% endblock %}
+{% block content %}
+<section class="hero rise">
+  <div class="hero-in">
+    <div class="urdu" lang="ur" dir="rtl">السلام علیکم</div>
+    <h1>Khush aamdeed, {{ current_user.display }}</h1>
+    <p>{{ stats.total }} applications aapki hain{% if stats.corrections %}, jin mein {{ stats.corrections }} par correction mangi gayi hai{% endif %}.</p>
+  </div>
+  {% if can('app.create') %}<form method="post" action="{{ url_for('new_application') }}" class="hero-in"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">{{ icon('plus') }} New Application</button></form>{% endif %}
+</section>
+<div class="kpis">
+  <a class="kpi rise" style="--i:1" href="{{ url_for('staff_applications', status='Draft') }}"><small>Drafts</small><b>{{ stats.drafts }}</b></a>
+  <a class="kpi rise" style="--i:2" href="{{ url_for('staff_applications', status='Correction Required') }}"><small>Correction Required</small><b>{{ stats.corrections }}</b></a>
+  <div class="kpi rise" style="--i:3"><small>Review mein</small><b>{{ stats.progress }}</b></div>
+  <div class="kpi rise" style="--i:4"><small>Approved / aage</small><b>{{ stats.approved }}</b></div>
+  <a class="kpi rise" style="--i:5" href="{{ url_for('staff_applications', status='Rejected') }}"><small>Rejected</small><b>{{ stats.rejected }}</b></a>
+</div>
+{% if corrections %}
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('edit') }} Correction zaroori</h2></div>
+  <ul class="notes">{% for a in corrections %}
+    <li class="correction"><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.applicant_name or 'New applicant' }}</b></a> · <span class="appid">{{ a.app_id }}</span>
+      <small>Reviewer: {{ open_notes[a.id] or '—' }}</small>
+      <div class="row" style="margin-top:8px"><a class="btn small" href="{{ url_for('loan_form', app_id=a.id) }}">{{ icon('edit') }} Theek karein</a></div></li>
+  {% endfor %}</ul>
+</section>
+{% endif %}
+<div class="card pad-0 rise" style="--i:3">
+  <div class="card-head" style="padding:16px 20px 0"><h2>{{ icon('file') }} Drafts</h2></div>
+  {{ app_table(drafts, names, 'Koi draft nahi', 'Upar "New Application" se nayi application shuru karein.') }}
+</div>
+<div class="card pad-0 rise" style="--i:4">
+  <div class="card-head" style="padding:16px 20px 0"><h2>{{ icon('clock') }} Meri haaliya applications</h2><a class="muted" href="{{ url_for('staff_applications') }}">Sab dekhein</a></div>
+  {{ app_table(recent, names) }}
+</div>
+{% endblock %}

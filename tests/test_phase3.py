@@ -4,6 +4,8 @@ import threading
 import pytest
 from conftest import PG, DBNAME, new_app, get_row, uid, pg_admin, make_user, UserClient, ADMIN_PW
 
+ALL = "/staff/applications?scope=all"
+
 
 def text_of(r):
     return r.get_data(as_text=True)
@@ -233,7 +235,7 @@ def test_search_by_id_loan_cnic_name(staff):
     staff.post(f"/application/{pk}/loan-number", data={"loan_number": "SRCH-55"})
     app_id = get_row(pk).app_id
     for q in (app_id, "SRCH-55", "42101-9999999-9", "Searchable"):
-        assert app_id in text_of(staff.get("/", query_string={"q": q})), q
+        assert app_id in text_of(staff.get("/staff/applications", query_string={"q": q, "scope": "all"})), q
 
 
 def test_loan_number_unique(staff):
@@ -250,7 +252,7 @@ def test_soft_delete_and_restore(admin, staff):
     assert staff.post(f"/application/{pk}/delete").status_code == 403
     admin.post(f"/application/{pk}/delete", data={"reason": "duplicate entry"})
     assert get_row(pk).deleted_at is not None
-    assert app_id not in text_of(staff.get("/"))
+    assert app_id not in text_of(staff.get(ALL))
     assert staff.get(f"/application/{pk}").status_code == 404
     assert app_id in text_of(admin.get("/admin/deleted"))
     admin.post(f"/application/{pk}/restore")
@@ -291,10 +293,11 @@ def test_last_admin_protected(admin):
 
 def test_existing_pages_still_work(admin, staff):
     pk = new_app(staff, cnic="4210100000041")
-    for url in ("/", f"/application/{pk}", f"/application/{pk}/form", f"/application/{pk}/print",
-                "/account/password"):
+    for url in ("/staff", "/staff/applications", ALL, f"/application/{pk}", f"/application/{pk}/form",
+                f"/application/{pk}/print", "/account/password"):
         assert staff.get(url).status_code == 200, url
-    for url in ("/admin/users", "/admin/permissions", "/admin/reports", "/admin/deleted"):
+    for url in ("/admin", "/admin/applications", "/admin/users", "/admin/permissions", "/admin/reports",
+                "/admin/deleted", "/admin/settings", "/admin/audit"):
         assert admin.get(url).status_code == 200, url
     csv = text_of(admin.get("/admin/export"))
     assert "Loan No." in csv
@@ -304,8 +307,8 @@ def test_login_lockout_still_works(appm):
     c = appm.app.test_client()
     make_user("Staff", "lockme")
     for _ in range(appm.LOGIN_MAX_FAILS):
-        c.post("/login", data={"username": "lockme", "password": "wrong"})
-    assert c.post("/login", data={"username": "lockme", "password": "Password123"}).status_code == 429
+        c.post("/login/staff", data={"username": "lockme", "password": "wrong"})
+    assert c.post("/login/staff", data={"username": "lockme", "password": "Password123"}).status_code == 429
 
 
 def test_app_sends_actor_to_database(pg, appm):

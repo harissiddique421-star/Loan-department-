@@ -82,11 +82,11 @@ def pg():
 
 
 class UserClient:
-    def __init__(self, username, password):
+    def __init__(self, username, password, portal="staff"):
         self.c = appmod.app.test_client()
         self.username = username
-        r = self.c.post("/login", data={"username": username, "password": password})
-        assert r.status_code == 302, (username, r.status_code)
+        r = self.c.post(f"/login/{portal}", data={"username": username, "password": password})
+        assert r.status_code == 302, (username, portal, r.status_code)
 
     def get(self, *a, **k):
         return self.c.get(*a, **k)
@@ -100,17 +100,17 @@ _users = {}
 
 def make_user(role, name):
     if name not in _users:
-        admin = UserClient("admin", ADMIN_PW)
+        admin = UserClient("admin", ADMIN_PW, "admin")
         r = admin.post("/admin/users", data={"username": name, "password": "Password123", "role": role,
                                              "full_name": name.title()})
         assert r.status_code == 302
         _users[name] = True
-    return UserClient(name, "Password123")
+    return UserClient(name, "Password123", role.lower())
 
 
 @pytest.fixture
 def admin():
-    return UserClient("admin", ADMIN_PW)
+    return UserClient("admin", ADMIN_PW, "admin")
 
 
 @pytest.fixture
