@@ -138,7 +138,29 @@ def uid(name):
         return appmod.User.query.filter_by(username=name).first().id
 
 
-def new_app(client, **fields):
+TINY_JPG = bytes.fromhex("ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc0000b080001000101011100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9faffda0008010100003f00fbd3ffd9")
+REQUIRED_CNIC = ["cnic_app_front", "cnic_app_back", "cnic_w1_front", "cnic_w1_back", "cnic_w2_front", "cnic_w2_back"]
+
+
+def upload_kind(client, pk, kind, content=TINY_JPG):
+    import io
+    r = client.post(f"/application/{pk}/upload", data={"kind": kind, "file": (io.BytesIO(content), f"{kind}.jpg")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 302, (kind, r.status_code)
+
+
+def complete_app(client, pk, purpose="Business", fee=1700):
+    """Everything needed to submit: the 6 mandatory CNIC images, purpose and form fee."""
+    for k in REQUIRED_CNIC:
+        upload_kind(client, pk, k)
+    with appmod.app.app_context():
+        p = appmod.PurposeCategory.query.filter_by(name=purpose).first().id
+        f = appmod.FeeCategory.query.filter(appmod.FeeCategory.fee_amount == fee).first().id
+    r = client.post(f"/application/{pk}/details", data={"purpose_id": p, "fee_category_id": f})
+    assert r.status_code == 302
+
+
+def new_app(client, complete=True, **fields):
     r = client.post("/application/new")
     assert r.status_code == 302, r.status_code
     app_pk = int(r.headers["Location"].rstrip("/").split("/")[-2])
@@ -146,6 +168,8 @@ def new_app(client, **fields):
     data.update(fields)
     r = client.post(f"/application/{app_pk}/form", data=data)
     assert r.status_code == 302, r.status_code
+    if complete:
+        complete_app(client, app_pk)
     return app_pk
 
 

@@ -17,6 +17,31 @@
     }
   });
 
+  // CNIC / photo slots: shrink big camera pictures (max 1600px JPEG) before upload, then send.
+  document.addEventListener('change', function (e) {
+    var input = e.target;
+    if (!input.matches('input[type=file][data-shrink]') || !input.files || !input.files[0]) return;
+    var file = input.files[0], form = input.form;
+    var send = function () { if (input.hasAttribute('data-autosubmit') && form) form.submit(); };
+    if (!/^image\//.test(file.type) || !window.DataTransfer) return send();
+    var img = new Image();
+    img.onload = function () {
+      var k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+      if (k === 1 && file.size < 1500000) return send();
+      var c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      x.drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(function (blob) {
+        var dt = new DataTransfer();
+        dt.items.add(new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' }));
+        input.files = dt.files; send();
+      }, 'image/jpeg', 0.92);
+    };
+    img.onerror = send;
+    img.src = URL.createObjectURL(file);
+  });
+
   // Live preview for any photo picker that names a target <img>.
   document.addEventListener('change', function (e) {
     var input = e.target;

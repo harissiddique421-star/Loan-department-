@@ -211,12 +211,12 @@ def test_db_rejects_illegal_status_change(pg, staff):
             c.execute("insert into audit_log(action) values ('x'); update audit_log set reason = 'y'")
 
 
-def test_legacy_connection_still_works(pg):
-    """The currently deployed code does not send app.role; it must keep working after the migration."""
+def test_connection_without_role_has_no_access(pg):
+    """Since the Phase 5–9 migration the temporary 'legacy' access is gone: no role, no rows."""
     import psycopg
     with psycopg.connect(PG + f" dbname={DBNAME} user=tooba_app", autocommit=True) as c:
-        assert c.execute("select count(*) from application where id = 1").fetchone()[0] == 1
-        c.execute("update application set updated_at = now() where id = 1")
+        assert c.execute("select count(*) from application").fetchone()[0] == 0
+        assert c.execute("update application set updated_at = now() where id = 1").rowcount == 0
 
 
 # ------------------------------------------------------------------ duplicates, search, delete, documents

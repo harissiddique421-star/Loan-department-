@@ -389,3 +389,11 @@ a.kpi:hover { border-color: var(--green-100); color: var(--ink) }
 .settings-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
 .settings-row input[type=text], .settings-row input:not([type]) { width: 170px; padding: 7px 10px; font-size: 14px }
 .settings-row input.num { width: 110px }
+.cnic-grid { display: grid; gap: 12px }
+.cnic-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px }
+.cnic-row > b { grid-column: 1 / -1; font-size: 14px }
+.cnic-slot { border: 1.5px dashed #a9c7b2; border-radius: 12px; padding: 8px; display: grid; gap: 6px; justify-items: center; background: #f7fbf8; min-height: 120px; align-content: start }
+.cnic-slot.has { border-style: solid; border-color: var(--green); background: #fff }
+.cnic-slot img { max-height: 90px; max-width: 100%; object-fit: contain; border-radius: 6px }
+.cnic-side { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em }
+.pick-file { cursor: pointer }
