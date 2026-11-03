@@ -2529,7 +2529,11 @@ with app.app_context():
     else:
         # PostgreSQL schema changes are applied as reviewed migrations (supabase/migrations),
         # never automatically. Until the Phase 3 migration is applied, show a maintenance page.
-        MIGRATION_PENDING = not inspect(db.engine).has_table("audit_log")
+        _insp = inspect(db.engine)
+        # every table the code needs; a missing one means a migration has not been applied yet
+        MIGRATION_PENDING = not all(_insp.has_table(t) for t in (
+            "audit_log", "role_permission", "disbursement_batch", "disbursement_entry", "cheque",
+            "gsheet_year", "gsheet_sync", "gsheet_sync_log"))
     if not MIGRATION_PENDING:
         # Local SQLite only: without ADMIN_PASSWORD a random one is generated and printed once.
         admin_pw = os.getenv("ADMIN_PASSWORD", "")
