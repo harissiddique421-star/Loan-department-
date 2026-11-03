@@ -27,16 +27,21 @@ USING_SQLITE = dburl.startswith("sqlite")
 
 
 def _secret_key():
-    """SECRET_KEY from the environment. On Vercel without one, derive a stable key from the
-    (secret) DATABASE_URL so sessions can't be forged with a known default."""
+    """SECRET_KEY from the environment. Without one, derive a stable key from the (secret)
+    DATABASE_URL so sessions can't be forged with a known default. The fixed development key
+    is used only for a local SQLite database, never on any real deployment (Vercel, Render...)."""
     if os.getenv("SECRET_KEY"):
         return os.environ["SECRET_KEY"]
-    if ON_VERCEL:
+    if os.getenv("DATABASE_URL"):
         import hashlib
-        if os.getenv("DATABASE_URL"):
-            return hashlib.sha256(("tooba-session:" + os.environ["DATABASE_URL"]).encode()).hexdigest()
+        return hashlib.sha256(("tooba-session:" + os.environ["DATABASE_URL"]).encode()).hexdigest()
+    if ON_VERCEL:
         return secrets.token_hex(32)
     return "dev-only-change-me"
+
+
+# HTTPS-only cookies everywhere except a local SQLite test copy (set SECURE_COOKIES=0 to override).
+SECURE_COOKIES = os.getenv("SECURE_COOKIES", "1" if (ON_VERCEL or not USING_SQLITE) else "0") == "1"
 
 
 app.config["SECRET_KEY"] = _secret_key()
@@ -54,8 +59,8 @@ app.config.update(
     MAX_CONTENT_LENGTH=15 * 1024 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=ON_VERCEL,
-    REMEMBER_COOKIE_SECURE=ON_VERCEL,
+    SESSION_COOKIE_SECURE=SECURE_COOKIES,
+    REMEMBER_COOKIE_SECURE=SECURE_COOKIES,
     PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
     WTF_CSRF_TIME_LIMIT=None,
 )
@@ -65,6 +70,11 @@ csrf = CSRFProtect(app)
 lm = LoginManager(app)
 lm.login_view = "login"
 lm.login_message = "Pehle login karein."
+lm.session_protection = "strong"   # a session cookie copied to another browser/IP is dropped
+
+# Brute-force protection: after this many wrong passwords within the window, login is blocked.
+LOGIN_MAX_FAILS = int(os.getenv("LOGIN_MAX_FAILS", "5"))
+LOGIN_WINDOW = timedelta(minutes=int(os.getenv("LOGIN_LOCK_MINUTES", "15")))
 
 # Every logged-in user can open/edit every application unless this is set to 1.
 RESTRICT_STAFF = os.getenv("RESTRICT_STAFF_ACCESS", "0") == "1"
@@ -86,6 +96,15 @@ class User(UserMixin, db.Model):
 
     def set_password(self, p): self.password_hash = generate_password_hash(p)
     def check_password(self, p): return check_password_hash(self.password_hash, p)
+
+    def session_token(self):
+        # Changes whenever the password changes, so old sessions (other browsers, stolen
+        # cookies) stop working after a password change or admin reset.
+        import hashlib
+        return hashlib.sha256(("sess:" + self.password_hash).encode()).hexdigest()[:16]
+
+    def get_id(self):
+        return f"{self.id}:{self.session_token()}"
 
 
 class Application(db.Model):
@@ -219,8 +238,31 @@ def delete_file(doc):
 # ---------------------------------------------------------------- helpers
 @lm.user_loader
 def load_user(uid):
-    u = db.session.get(User, int(uid))
-    return u if u and u.active else None
+    sid, _, token = str(uid).partition(":")
+    if not sid.isdigit() or not token:
+        return None
+    u = db.session.get(User, int(sid))
+    if not u or not u.active or not secrets.compare_digest(token, u.session_token()):
+        return None
+    return u
+
+
+def client_ip():
+    # Vercel / most proxies put the real client address first in X-Forwarded-For.
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return (fwd.split(",")[0].strip() if fwd else request.remote_addr or "")[:45]
+
+
+def login_blocked(username, ip):
+    since = datetime.utcnow() - LOGIN_WINDOW
+    recent = Log.query.filter(Log.created_at >= since, Log.action.like("LOGIN_FAIL %"))
+    esc = lambda v: v.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    by_user = recent.filter(Log.action.like(f"LOGIN_FAIL user={esc(username[:60])} %", escape="\\")).count()
+    by_ip = recent.filter(Log.action.like(f"% ip={esc(ip)}", escape="\\")).count()
+    return by_user >= LOGIN_MAX_FAILS or by_ip >= LOGIN_MAX_FAILS * 4
+
+
+_DUMMY_HASH = generate_password_hash(secrets.token_hex(16))
 
 
 def admin_required(fn):
@@ -233,9 +275,16 @@ def admin_required(fn):
     return inner
 
 
-def log_action(action, app_id=None):
-    db.session.add(Log(user_id=current_user.id, action=action[:200], application_id=app_id))
+def log_action(action, app_id=None, user_id=None):
+    uid = user_id if user_id is not None else (current_user.id if current_user.is_authenticated else None)
+    db.session.add(Log(user_id=uid, action=action[:200], application_id=app_id))
     db.session.commit()
+
+
+def csv_safe(v):
+    """Stop CSV/Excel formula injection (=HYPERLINK(...), +cmd, @SUM...) from applicant data."""
+    v = "" if v is None else str(v)
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
 
 
 def allowed_app(a):
@@ -268,10 +317,20 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard"))
     if request.method == "POST":
-        u = User.query.filter_by(username=request.form.get("username", "").strip()).first()
-        if u and u.active and u.check_password(request.form.get("password", "")):
+        username = request.form.get("username", "").strip()[:80]
+        ip = client_ip()
+        if login_blocked(username, ip):
+            flash(f"Bohat zyada ghalat koshishein. {int(LOGIN_WINDOW.total_seconds() // 60)} minute baad try karein.")
+            return render_template("login.html"), 429
+        u = User.query.filter_by(username=username).first()
+        password = request.form.get("password", "")
+        # Always run one hash check so response time doesn't reveal which usernames exist.
+        ok = u.check_password(password) if u else (check_password_hash(_DUMMY_HASH, password) and False)
+        if u and u.active and ok:
             login_user(u)
+            log_action("Login ip=" + ip, user_id=u.id)
             return redirect(url_for("dashboard"))
+        log_action(f"LOGIN_FAIL user={username[:60]} ip={ip}", user_id=u.id if u else None)
         flash("Username ya password ghalat hai, ya account disabled hai.")
     return render_template("login.html")
 
@@ -296,6 +355,8 @@ def change_password():
         else:
             current_user.set_password(request.form["new"])
             db.session.commit()
+            login_user(current_user._get_current_object())   # keep this session; all other sessions are now logged out
+            log_action("Changed own password")
             flash("Password change ho gaya.")
             return redirect(url_for("dashboard"))
     return render_template("change_password.html")
@@ -520,7 +581,7 @@ def document(doc_id):
     inline = request.args.get("inline") == "1" and (d.is_image or d.content_type == "application/pdf")
     resp = send_file(io.BytesIO(read_file(d)), mimetype=d.content_type, download_name=d.original_name,
                      as_attachment=not inline)
-    resp.headers["Cache-Control"] = "private, max-age=300"
+    resp.headers["Cache-Control"] = "private, no-store"   # CNIC photos must not stay in a shared PC's cache
     return resp
 
 
@@ -595,10 +656,13 @@ def export_csv():
     keys = known + sorted({k for a in apps for k in a.data} - set(known))
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["Application ID", "Status", "Created", "Updated"] + [FIELD_LABELS.get(k, k) for k in keys])
+    w.writerow([csv_safe(x) for x in ["Application ID", "Status", "Created", "Updated"]
+                + [FIELD_LABELS.get(k, k) for k in keys]])
     for a in apps:
         d = a.data
-        w.writerow([a.app_id, a.status, a.created_at, a.updated_at] + [d.get(k, "") for k in keys])
+        w.writerow([csv_safe(x) for x in [a.app_id, a.status, a.created_at, a.updated_at]
+                    + [d.get(k, "") for k in keys]])
+    log_action("Exported CSV")
     return Response("﻿" + out.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": "attachment; filename=applications.csv"})
 
@@ -630,6 +694,7 @@ def backup_export():
                        "kind": d.kind, "storage": d.storage, "size": d.size}
                       for d in Document.query.all()],
     }
+    log_action("Downloaded backup")
     resp = jsonify(payload)
     resp.headers["Content-Disposition"] = "attachment; filename=tooba-backup.json"
     return resp
@@ -653,6 +718,11 @@ def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if SECURE_COOKIES:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if current_user.is_authenticated and "Cache-Control" not in response.headers:
+        response.headers["Cache-Control"] = "private, no-store"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; img-src 'self' data: blob:; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
@@ -685,7 +755,11 @@ with app.app_context():
     add_missing_columns()
     # Create the first admin only when the database has no admin yet, and only from
     # ADMIN_USERNAME/ADMIN_PASSWORD. Never fall back to a built-in password on a real database.
-    admin_pw = os.getenv("ADMIN_PASSWORD") or ("ChangeThisAdminPassword123!" if USING_SQLITE and not ON_VERCEL else "")
+    # Local SQLite only: without ADMIN_PASSWORD a random one is generated and printed once.
+    admin_pw = os.getenv("ADMIN_PASSWORD", "")
+    if not admin_pw and USING_SQLITE and not ON_VERCEL and not User.query.filter_by(role="Admin").first():
+        admin_pw = secrets.token_urlsafe(12)
+        print(f"[tooba] Local admin created: {os.getenv('ADMIN_USERNAME', 'admin')} / {admin_pw}")
     if admin_pw and not User.query.filter_by(role="Admin").first():
         admin = User(username=os.getenv("ADMIN_USERNAME", "admin"), role="Admin")
         admin.set_password(admin_pw)
