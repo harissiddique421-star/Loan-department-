@@ -1,13 +1,13 @@
 {% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Applications{% endblock %}
 {% block content %}
-{% set colors = {'Draft':'#7b8a80','Pending':'#c27a0e','In Review':'#6b3fd1','Approved':'#0e7a36','Rejected':'#c4372f','Completed':'#1b2f6e'} %}
+{% set colors = {'Draft':'#7b8a80','Submitted':'#2457c5','Pending Review':'#c27a0e','In Review':'#6b3fd1','Correction Required':'#a15c07','Submitted Again':'#2457c5','Approved':'#0e7a36','Rejected':'#c4372f','Ready for Disbursement':'#0b6a2e','Added to Disbursement Sheet':'#08551f','Disbursed':'#1b2f6e','Completed':'#1b2f6e'} %}
 <section class="hero rise">
   <div class="hero-in">
     <div class="urdu" lang="ur" dir="rtl">السلام علیکم</div>
     <h1>Khush aamdeed, {{ current_user.username }}</h1>
-    <p>{{ total }} {{ 'application' if total == 1 else 'applications' }} record mein {{ 'hai' if total == 1 else 'hain' }}{% if counts['Pending'] %}, jin mein {{ counts['Pending'] }} pending hain{% endif %}. Nayi application shuru karein ya kisi record ko khol kar update karein.</p>
+    <p>{{ total }} {{ 'application' if total == 1 else 'applications' }} record mein {{ 'hai' if total == 1 else 'hain' }}{% if counts['Pending Review'] %}, jin mein {{ counts['Pending Review'] }} review ke intezar mein hain{% endif %}. Nayi application shuru karein ya kisi record ko khol kar update karein.</p>
   </div>
-  <form method="post" action="{{ url_for('new_application') }}" class="hero-in"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">{{ icon('plus') }} New Application</button></form>
+  {% if can('app.create') %}<form method="post" action="{{ url_for('new_application') }}" class="hero-in"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">{{ icon('plus') }} New Application</button></form>{% endif %}
 </section>
 
 <div class="stats">
@@ -17,25 +17,25 @@
 
 <div class="card pad-0 rise" style="--i:9">
   <form class="toolbar" method="get">
-    <div class="field-icon">{{ icon('search') }}<input name="q" value="{{ q }}" placeholder="Naam, CNIC ya TBF ID se search karein" aria-label="Search"></div>
+    <div class="field-icon">{{ icon('search') }}<input name="q" value="{{ q }}" placeholder="Naam, CNIC, Application ID ya Loan No. se search karein" aria-label="Search"></div>
     {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
     <button class="btn navy">{{ icon('search') }} Search</button>
     {% if q or status %}<a class="btn light" href="{{ url_for('dashboard') }}">{{ icon('x') }} Clear</a>{% endif %}
   </form>
   {% if apps %}
   <div class="overflow"><table>
-    <thead><tr><th>Applicant</th><th>ID</th><th class="hide-sm">CNIC</th><th>Status</th><th class="hide-sm">Last update</th><th style="text-align:right">Actions</th></tr></thead>
+    <thead><tr><th>Applicant</th><th>ID</th><th class="hide-sm">Loan No.</th><th class="hide-sm">CNIC</th><th>Status</th><th class="hide-sm">Last update</th><th style="text-align:right">Actions</th></tr></thead>
     <tbody>
     {% for a in apps %}
     <tr class="rise" style="--i:{{ [loop.index, 12]|min + 9 }}">
       <td><a class="who" href="{{ url_for('view_application', app_id=a.id) }}"><span class="av">{{ (a.applicant_name or '?')[:1]|upper }}</span><span><b>{{ a.applicant_name or 'New applicant' }}</b><small>{{ (a.data.get('business') or a.data.get('phone') or '—') }}</small></span></a></td>
       <td><span class="appid">{{ a.app_id }}</span></td>
+      <td class="hide-sm mono">{{ a.loan_number or '—' }}</td>
       <td class="hide-sm mono">{{ a.cnic or '—' }}</td>
-      <td><span class="badge {{ a.status }}">{{ a.status }}</span></td>
+      <td><span class="badge {{ a.status|slug }}">{{ a.status }}</span></td>
       <td class="hide-sm muted">{{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }}{% if a.updated_by %}<br>by {{ names.get(a.updated_by, '?') }}{% endif %}</td>
       <td><div class="acts">
         <a class="act" href="{{ url_for('view_application', app_id=a.id) }}" title="Open">{{ icon('eye') }}</a>
-        <a class="act" href="{{ url_for('loan_form', app_id=a.id) }}" title="Edit">{{ icon('edit') }}</a>
         <a class="act" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank" title="Print">{{ icon('print') }}</a>
       </div></td>
     </tr>
@@ -51,10 +51,11 @@
   {% endif %}
 </div>
 
-{% if current_user.role == 'Admin' %}
 <div class="row no-print">
+  {% if can('export') %}
   <a class="btn light small" href="{{ url_for('export_csv') }}">{{ icon('download') }} Export CSV (Excel)</a>
   <a class="btn light small" href="{{ url_for('backup_export') }}">{{ icon('database') }} Download backup</a>
+  {% endif %}
+  {% if can('app.restore') %}<a class="btn light small" href="{{ url_for('deleted_applications') }}">{{ icon('trash') }} Deleted applications</a>{% endif %}
 </div>
-{% endif %}
 {% endblock %}

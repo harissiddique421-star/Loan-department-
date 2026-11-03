@@ -6,17 +6,31 @@
     <a class="muted" href="{{ url_for('dashboard') }}">{{ icon('back') }} Applications</a>
   </div>
   <div class="row">
-    <a class="btn" href="{{ url_for('loan_form', app_id=a.id) }}">{{ icon('edit') }} Edit Form</a>
-    <a class="btn light" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank">{{ icon('print') }} Print / PDF</a>
+    {% if editable %}<a class="btn" href="{{ url_for('loan_form', app_id=a.id) }}">{{ icon('edit') }} Edit Form</a>{% endif %}
+    {% if not a.deleted_at %}<a class="btn light" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank">{{ icon('print') }} Print / PDF</a>{% endif %}
   </div>
 </div>
+
+{% if a.deleted_at %}
+<div class="warnbox">Ye application {{ a.deleted_at.strftime('%d %b %Y') }} ko {{ names.get(a.deleted_by, '?') }} ne delete ki thi.
+  {% if can('app.restore') %}<form method="post" action="{{ url_for('restore_application', app_id=a.id) }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small">{{ icon('back') }} Restore</button></form>{% endif %}
+</div>
+{% endif %}
+
+{% if duplicates %}
+<div class="warnbox">{{ icon('id') }} Is CNIC par aur applications bhi hain:
+  {% for app_id, st, created in duplicates %}<b>{{ app_id }}</b> ({{ st }}{% if created %}, {{ created.strftime('%d %b %Y') }}{% endif %}){{ ', ' if not loop.last }}{% endfor %}.
+  Repeat application jaiz ho sakti hai — sirf tasdeeq kar lein.</div>
+{% endif %}
 
 <section class="card rise" style="--i:1">
   <div class="profile">
     <img class="photo" alt="Applicant photo" src="{{ url_for('document', doc_id=a.photo.id, inline=1) if a.photo else url_for('static', filename='no-photo.svg') }}">
     <div>
-      <div class="title-line"><h1>{{ a.applicant_name or 'New applicant' }}</h1><span class="badge {{ a.status }}">{{ a.status }}</span></div>
-      <div class="meta"><span class="appid">{{ a.app_id }}</span> · Created {{ a.created_at.strftime('%d %b %Y, %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}{% if a.updated_by %} · Last updated {{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }} by {{ names.get(a.updated_by, '?') }}{% endif %}</div>
+      <div class="title-line"><h1>{{ a.applicant_name or 'New applicant' }}</h1><span class="badge {{ a.status|slug }}">{{ a.status }}</span></div>
+      <div class="meta"><span class="appid">{{ a.app_id }}</span>{% if a.loan_number %} · Loan No. <b>{{ a.loan_number }}</b>{% endif %} · Created {{ a.created_at.strftime('%d %b %Y, %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}{% if a.updated_by %} · Last updated {{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }} by {{ names.get(a.updated_by, '?') }}{% endif %}
+        {% if a.reviewer_id %} · Reviewer: <b>{{ names.get(a.reviewer_id, '?') }}</b>{% endif %}</div>
+      {% if a.status == 'Rejected' and a.rejection_reason %}<div class="warnbox">Rejection reason: {{ a.rejection_reason }}</div>{% endif %}
       <div class="facts">
         <div class="fact">{{ icon('user') }}<div><small>Father / Husband</small><span>{{ d.get('father') or '—' }}</span></div></div>
         <div class="fact">{{ icon('id') }}<div><small>CNIC</small><span class="mono">{{ d.get('cnic') or '—' }}</span></div></div>
@@ -25,23 +39,60 @@
         <div class="fact">{{ icon('calendar') }}<div><small>Monthly installment</small><span>{{ ('Rs. ' ~ d.get('qist')) if d.get('qist') else '—' }}</span></div></div>
         <div class="fact">{{ icon('store') }}<div><small>Business / Job</small><span>{{ d.get('business') or '—' }}</span></div></div>
       </div>
+      {% if not a.deleted_at %}
       <div class="controls">
+        {% if transitions %}
         <form method="post" action="{{ url_for('update_status', app_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="status" aria-label="Status">{% for s in STATUSES %}<option {{ 'selected' if a.status == s }}>{{ s }}</option>{% endfor %}</select>
+          <select name="status" aria-label="New status">{% for s in transitions %}<option>{{ s }}</option>{% endfor %}</select>
+          <input class="reason" name="reason" placeholder="Wajah (Reject / Correction ke liye zaroori)" aria-label="Reason" maxlength="2000">
           <button class="btn small">{{ icon('check') }} Update status</button>
         </form>
+        {% endif %}
+        {% if editable or can('disbursement.manage') %}
+        <form method="post" action="{{ url_for('set_loan_number', app_id=a.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input name="loan_number" value="{{ a.loan_number or '' }}" placeholder="Loan No." aria-label="Loan number" maxlength="30" style="width:130px">
+          <button class="btn small light">{{ icon('check') }} Save Loan No.</button>
+        </form>
+        {% endif %}
+        {% if can('app.assign') %}
         <form method="post" action="{{ url_for('assign_application', app_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="staff_id" aria-label="Assign to"><option value="">Unassigned</option>{% for u in staff %}<option value="{{ u.id }}" {{ 'selected' if a.assigned_to == u.id }}>{{ u.username }}</option>{% endfor %}</select>
+          <select name="staff_id" aria-label="Staff"><option value="">Staff: unassigned</option>{% for u in staff %}<option value="{{ u.id }}" {{ 'selected' if a.assigned_to == u.id }}>Staff: {{ u.display }}</option>{% endfor %}</select>
+          <select name="reviewer_id" aria-label="Reviewer"><option value="">Reviewer: none</option>{% for u in reviewers %}<option value="{{ u.id }}" {{ 'selected' if a.reviewer_id == u.id }}>Reviewer: {{ u.display }}</option>{% endfor %}</select>
           <button class="btn small light">{{ icon('users') }} Assign</button>
         </form>
+        {% endif %}
       </div>
+      {% endif %}
     </div>
   </div>
 </section>
 
-<details class="card rise" style="--i:2">
+{% if notes or can_note %}
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('edit') }} Review notes &amp; corrections</h2></div>
+  {% if notes %}
+  <ul class="notes">
+    {% for n in notes %}
+    <li class="{{ n.kind }}{{ ' resolved' if n.resolved_at }}"><b>{{ {'note': 'Internal note', 'correction': 'Correction required', 'recommend': 'Recommendation', 'decision': 'Decision'}[n.kind] }}:</b> {{ n.body }}
+      <small>{{ names.get(n.author_id, '?') }} · {{ n.created_at.strftime('%d %b %Y, %H:%M') }}{% if n.resolved_at %} · resolved {{ n.resolved_at.strftime('%d %b %Y') }}{% endif %}</small></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if can_note and not a.deleted_at %}
+  <form method="post" action="{{ url_for('add_note', app_id=a.id) }}" class="row" style="margin-top:12px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="kind" aria-label="Note type"><option value="note">Internal note (staff ko nazar nahi aata)</option><option value="recommend">Recommendation</option></select>
+    <input name="body" required maxlength="4000" placeholder="Note likhein" aria-label="Note" style="flex:1;min-width:220px">
+    <button class="btn small">{{ icon('plus') }} Add</button>
+  </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<details class="card rise" style="--i:3">
   <summary>Poora form (saari details)</summary>
   {% for title, fields in FORM_SECTIONS %}
   <h3>{{ title }}</h3>
@@ -49,14 +100,16 @@
   {% endfor %}
 </details>
 
-<section class="card rise" style="--i:3">
+<section class="card rise" style="--i:4">
   <div class="card-head"><h2>{{ icon('files') }} Pictures &amp; Documents</h2><span class="muted">{{ docs|length }} files</span></div>
+  {% if editable and can('doc.upload') %}
   <form class="uploadbar" method="post" action="{{ url_for('upload', app_id=a.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="file" name="file" multiple required accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx" aria-label="Files">
     <select name="kind" aria-label="File type"><option value="document">Document</option>{% for kind, en, ur, pg in PHOTO_SLOTS %}<option value="{{ kind }}">{{ en }}</option>{% endfor %}</select>
     <button class="btn">{{ icon('upload') }} Upload</button>
   </form>
+  {% endif %}
   {% if docs %}
   <ul class="files">
   {% for doc in docs %}
@@ -71,7 +124,9 @@
       </div>
       <div class="ops">
         <a class="btn small light" href="{{ url_for('document', doc_id=doc.id) }}">{{ icon('download') }}</a>
+        {% if (editable and can('doc.upload')) or can('app.delete') %}
         <form method="post" action="{{ url_for('delete_document', doc_id=doc.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small danger" data-confirm="Ye file delete karein?" title="Delete">{{ icon('trash') }}</button></form>
+        {% endif %}
       </div>
     </li>
   {% endfor %}
@@ -81,17 +136,18 @@
   {% endif %}
 </section>
 
-<section class="card rise" style="--i:4">
+<section class="card rise" style="--i:5">
   <div class="card-head"><h2>{{ icon('clock') }} History</h2></div>
   <ol class="timeline">
-  {% for l in logs %}<li><span class="pt"></span><div><b>{{ names.get(l.user_id, '?') }}</b> — {{ l.action }}<time>{{ l.created_at.strftime('%d %b %Y, %H:%M') }}</time></div></li>{% else %}<li class="muted">Abhi koi history nahi.</li>{% endfor %}
+  {% for h in history %}<li><span class="pt"></span><div><b>{{ h.who }}</b> — {{ h.action }}{% if h.detail %} ({% for k, v in h.detail.items() %}{{ v if v is not none else '—' }}{{ ', ' if not loop.last }}{% endfor %}){% endif %}{% if h.reason %}: <i>{{ h.reason }}</i>{% endif %}<time>{{ h.at.strftime('%d %b %Y, %H:%M') if h.at }}</time></div></li>{% else %}<li class="muted">Abhi koi history nahi.</li>{% endfor %}
   </ol>
 </section>
 
-{% if current_user.role == 'Admin' %}
-<form method="post" action="{{ url_for('delete_application', app_id=a.id) }}" class="no-print">
+{% if can('app.delete') and not a.deleted_at %}
+<form method="post" action="{{ url_for('delete_application', app_id=a.id) }}" class="no-print row">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button class="btn small danger" data-confirm="Poori application aur uski files hamesha ke liye delete ho jayengi. Pakka?">{{ icon('trash') }} Delete application</button>
+  <input name="reason" placeholder="Delete ki wajah" aria-label="Delete reason" maxlength="500">
+  <button class="btn small danger" data-confirm="Application delete (hide) ho jayegi. Admin baad mein restore kar sakta hai. Pakka?">{{ icon('trash') }} Delete application</button>
 </form>
 {% endif %}
 {% endblock %}

@@ -7,7 +7,7 @@
   <div class="row no-print"><a class="btn light" href="{{ url_for('export_csv') }}">{{ icon('download') }} Export CSV</a><button class="btn light" data-print>{{ icon('print') }} Print</button></div></div>
 <div class="grid">
   <section class="card rise" style="--i:1"><div class="card-head"><h2>{{ icon('chart') }} Status</h2></div>
-    <div class="bars">{% for s, c in by_status %}<div class="bar-row"><span><span class="badge {{ s }}">{{ s }}</span></span><span class="bar-track"><span class="bar-fill" style="display:block;width:{{ (c / ns.ms * 100)|round }}%;--i:{{ loop.index }}"></span></span><b>{{ c }}</b></div>{% else %}<p class="muted">Abhi data nahi.</p>{% endfor %}</div>
+    <div class="bars">{% for s, c in by_status %}<div class="bar-row"><span><span class="badge {{ s|slug }}">{{ s }}</span></span><span class="bar-track"><span class="bar-fill" style="display:block;width:{{ (c / ns.ms * 100)|round }}%;--i:{{ loop.index }}"></span></span><b>{{ c }}</b></div>{% else %}<p class="muted">Abhi data nahi.</p>{% endfor %}</div>
   </section>
   <section class="card rise" style="--i:2"><div class="card-head"><h2>{{ icon('users') }} Assigned per user</h2></div>
     <div class="bars">{% for n, c in by_staff %}<div class="bar-row"><span>{{ n }}</span><span class="bar-track"><span class="bar-fill" style="display:block;width:{{ (c / ns.mu * 100)|round }}%;--i:{{ loop.index }}"></span></span><b>{{ c }}</b></div>{% else %}<p class="muted">Abhi data nahi.</p>{% endfor %}</div>
