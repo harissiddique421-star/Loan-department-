@@ -1,0 +1,43 @@
+/* Disbursement sheet — screen and A4 landscape print, styled after the foundation's own sheet. */
+.dsheet { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 18px; overflow-x: auto; color: #111 }
+.ds-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 2px solid #111; padding-bottom: 8px }
+.ds-banner img { width: 110px; height: auto }
+.ds-title { flex: 1; text-align: center }
+.ds-title .t1 { font: 900 clamp(22px, 3.4vw, 40px)/1.05 "Arial Black", "Plus Jakarta Sans", sans-serif; color: #0e7a36; letter-spacing: .04em }
+.ds-title .t2 { font: 800 clamp(13px, 1.6vw, 20px)/1.2 "Arial Black", sans-serif; color: #1b2f6e }
+.ds-title .t3 { font: 700 clamp(15px, 2vw, 24px)/1.8 var(--f-urdu, serif); color: #c4372f }
+.ds-meta { display: flex; justify-content: center; gap: 0; margin: 10px 0 0 }
+.ds-meta span { border: 1.5px solid #111; padding: 4px 26px; font-size: 14px; font-family: Georgia, serif }
+.ds-meta span + span { border-left: 0 }
+.u { text-decoration: underline }
+.ds-table { width: 100%; border-collapse: collapse; font-family: Georgia, "Bookman Old Style", serif; font-size: 13px; margin-top: 8px }
+.ds-table th, .ds-table td { border: 1px solid #111; padding: 6px 6px; text-align: center; vertical-align: middle }
+.ds-table th { background: #ecf7ef; font-weight: 700 }
+.ds-table td { font-weight: 700; height: 92px }
+.ds-table td.l { text-align: left }
+.ds-table td.ph img { width: 96px; height: 80px; object-fit: cover; display: block; margin: 0 auto }
+.ds-table th:nth-child(10), .ds-table td:nth-child(10) { min-width: 120px }
+.ds-table th:nth-child(11), .ds-table td:nth-child(11) { min-width: 90px }
+.ds-table tfoot td { height: auto; border: 0; padding-top: 10px }
+.ds-table.small td { height: auto; padding: 4px 6px }
+.ds-table.small tfoot td { border: 1px solid #111 }
+.ds-report { max-width: 760px; margin-top: 18px }
+.ds-report h3 { text-align: center; text-decoration: underline; font-family: Georgia, serif; font-size: 18px }
+.ds-sign { display: flex; justify-content: space-around; margin-top: 46px; font-weight: 700; text-decoration: underline; font-family: Georgia, serif }
+.ds-cheque { display: grid; gap: 4px; margin-top: 6px; font-weight: 400 }
+.ds-cheque input, .ds-cheque select { padding: 4px 6px; font-size: 12px; width: 140px }
+.ds-ops { display: grid; gap: 4px; margin-top: 6px; font-weight: 400 }
+.ds-ops input { padding: 4px 6px; font-size: 12px; width: 120px }
+.ds-paid { display: block; font-size: 11px; color: var(--green-600) }
+@media print {
+  @page { size: A4 landscape; margin: 10mm 8mm 14mm; @bottom-center { content: "Page " counter(page) " of " counter(pages); font: 10px Georgia, serif } }
+  .dsheet { border: 0; padding: 0; overflow: visible }
+  .ds-table thead { display: table-header-group }
+  .ds-table tr { break-inside: avoid }
+  .ds-table td { height: 80px }
+  .ds-report { break-inside: avoid }
+  .shell-main .container { padding: 0 }
+}
+.ds-table th { text-transform: none; letter-spacing: 0; color: #111; font-size: 13px }
+.ds-table tfoot td { border: 0; border-top: 1px solid #111 }
+.ds-table.small tfoot td { border: 1px solid #111 }

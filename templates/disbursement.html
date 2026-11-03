@@ -1,0 +1,100 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Disbursement {{ s.number }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='sheet.css') }}">{% endblock %}
+{% block content %}
+{% set manage = can('disbursement.manage') and not b.closed %}
+{% set cheques = (can('cheque.manage') or can('disbursement.manage')) and not b.closed %}
+<div class="page-head rise no-print">
+  <div><a class="muted" href="{{ url_for('disbursement_list') }}">{{ icon('back') }} Disbursement Sheets</a>
+    <h1>Disbursement {{ s.number_text }} <span class="badge {{ 's-rejected' if b.closed else 's-approved' }}">{{ 'Closed' if b.closed else 'Open' }}</span></h1>
+    <p>{{ s.count }} applicants · Rs. {{ money(s.total_amount) }} · form fees Rs. {{ money(s.total_fees) }}{% if b.closed %} · closed {{ b.closed_at.strftime('%d %b %Y') }} by {{ names.get(b.closed_by, '?') }}{% endif %}{% if b.reopen_reason %} · reopened: {{ b.reopen_reason }}{% endif %}</p></div>
+  <div class="row">
+    <button class="btn light" data-print>{{ icon('print') }} Print</button>
+    <a class="btn light" href="{{ url_for('disbursement_xlsx', bid=b.id) }}">{{ icon('download') }} Excel</a>
+    {% if gsheet %}<a class="btn light" href="{{ gsheet.url }}" target="_blank" rel="noopener">{{ icon('files') }} Google Sheet</a>{% endif %}
+    {% if can('period.close') %}
+      {% if b.closed %}
+      <form method="post" action="{{ url_for('disbursement_reopen', bid=b.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Kholne ki wajah" required maxlength="500" aria-label="Reopen reason"><button class="btn small light">Reopen</button></form>
+      {% else %}
+      <form method="post" action="{{ url_for('disbursement_close', bid=b.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small navy" data-confirm="Sheet close karne ke baad is mein koi tabdeeli nahi ho sakti (Admin wajah likh kar dobara khol sakta hai). Close karein?">{{ icon('check') }} Close sheet</button></form>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<div class="dsheet">
+  <div class="ds-banner">
+    <div class="ds-title"><div class="t1">THE TOOBA FOUNDATION</div><div class="t2">&amp; Community Center</div><div class="t3" lang="ur" dir="rtl">سود سے پاک چھوٹے قرضوں کا فلاحی ادارہ</div></div>
+    <img src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation">
+  </div>
+  <div class="ds-meta"><span>Disbursement Number <b>{{ s.number_text }}</b></span><span class="u"><b>{{ s.date_text }}</b></span></div>
+  <table class="ds-table">
+    <thead><tr><th>S.No</th><th>Name</th><th>CNIC No.</th><th>Cell No.</th><th>Amount</th><th>Purpose</th><th>Loan No.</th><th>Cheque No.</th><th>Photo</th><th>Signature</th><th>Thumb</th><th>Form Fees</th></tr></thead>
+    <tbody>
+    {% for r in s.rows %}
+    <tr id="e{{ r.entry.id }}">
+      <td>{{ r.sno }}</td>
+      <td class="l">{{ r.name }}{% if r.disbursed %}<span class="no-print ds-paid">✓ disbursed</span>{% endif %}</td>
+      <td>{{ r.cnic }}</td><td>{{ r.phone }}</td><td>{{ money(r.amount) }}</td><td>{{ r.purpose }}</td><td>{{ r.loan_no }}</td>
+      <td>{{ r.cheque_no }}{% if r.cheque_status and r.cheque_status != 'Issued' %}<div class="no-print muted">{{ r.cheque_status }}</div>{% endif %}
+        {% if cheques %}
+        <form method="post" action="{{ url_for('save_cheque', eid=r.entry.id) }}" class="no-print ds-cheque">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input name="cheque_no" value="{{ r.cheque_no }}" placeholder="Cheque No." maxlength="40" aria-label="Cheque number for {{ r.name }}">
+          <select name="status" aria-label="Cheque status">{% for st in ('Issued', 'Pending', 'Cleared', 'Cancelled') %}<option {{ 'selected' if (r.cheque_status or 'Issued') == st }}>{{ st }}</option>{% endfor %}</select>
+          <input name="reason" placeholder="Wajah (badalne / cancel par)" maxlength="300" aria-label="Reason">
+          <button class="btn small light">Save</button>
+        </form>
+        {% if history[r.entry.id]|length > 1 or (history[r.entry.id] and history[r.entry.id][0].status == 'Cancelled') %}
+        <details class="no-print"><summary class="muted">Cheque history</summary>{% for c in history[r.entry.id] %}<div class="muted">{{ c.cheque_no }} — {{ c.status }}{% if c.cancel_reason %} ({{ c.cancel_reason }}){% endif %}</div>{% endfor %}</details>
+        {% endif %}
+        {% endif %}
+      </td>
+      <td class="ph"><img src="{{ url_for('disbursement_photo', eid=r.entry.id) }}" alt="Photo of {{ r.name }}" loading="lazy"></td>
+      <td></td><td></td>
+      <td>{{ money(r.fee) }}
+        {% if manage %}<div class="no-print ds-ops">
+          {% if not r.disbursed %}<form method="post" action="{{ url_for('disbursement_mark', eid=r.entry.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small light" title="Raqam ada ho gayi">✓ Paid</button></form>
+          <form method="post" action="{{ url_for('disbursement_remove', eid=r.entry.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Nikalne ki wajah" required maxlength="300" aria-label="Remove reason"><button class="btn small danger">Remove</button></form>{% endif %}
+        </div>{% endif %}
+      </td>
+    </tr>
+    {% else %}<tr><td colspan="12" class="muted">Abhi is sheet mein koi application nahi.</td></tr>{% endfor %}
+    </tbody>
+    <tfoot><tr><td></td><td class="u"><b>Total Amount</b></td><td colspan="2">Applicants: <b>{{ s.count }}</b></td><td class="u"><b>{{ money(s.total_amount) }}</b></td><td colspan="6">Disbursed: <b>{{ money(s.disbursed_amount) }}</b></td><td><b>{{ money(s.total_fees) }}</b></td></tr></tfoot>
+  </table>
+
+  <div class="ds-report">
+    <h3>Disbursement Report</h3>
+    <table class="ds-table small">
+      <thead><tr><th>Form Fee</th><th>Loan Amount</th><th>Fee Collection</th><th>Fee Amount</th><th>Number of Loan</th><th>Purpose</th><th>Loan Amount</th></tr></thead>
+      <tbody>
+      {% set n = [s.fee_table|length, s.purpose_table|length]|max %}
+      {% for k in range(n) %}{% set f = s.fee_table[k] if k < s.fee_table|length else none %}{% set p = s.purpose_table[k] if k < s.purpose_table|length else none %}
+      <tr><td>{{ money(f.fee) if f }}</td><td>{{ money(f.loan) if f }}</td><td>{{ f.count if f }}</td><td>{{ money(f.sum) if f }}</td>
+        <td>{{ p.count if p }}</td><td>{{ p.name if p }}</td><td>{{ money(p.sum) if p }}</td></tr>
+      {% endfor %}
+      </tbody>
+      <tfoot><tr><td></td><td><b>Total</b></td><td><b>{{ s.count }}</b></td><td><b>{{ money(s.total_fees) }}</b></td><td><b>{{ s.count }}</b></td><td></td><td><b>{{ money(s.total_amount) }}</b></td></tr></tfoot>
+    </table>
+    <div class="ds-sign"><span>President</span><span>General Secretary</span><span>Enquiry Officer</span></div>
+  </div>
+</div>
+
+{% if manage %}
+<section class="card rise no-print" style="--i:3;margin-top:18px">
+  <div class="card-head"><h2>{{ icon('plus') }} Approved applications add karein</h2><span class="muted">{{ eligible|length }}</span></div>
+  {% if eligible %}
+  <form method="post" action="{{ url_for('disbursement_add', bid=b.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <ul class="mini">{% for a in eligible %}
+      <li><label class="row"><input type="checkbox" name="app_id" value="{{ a.id }}"> <b>{{ a.applicant_name }}</b> <span class="muted">{{ a.app_id }} · Loan No. {{ a.loan_number or '—' }} · Rs. {{ money(a.loan_amount) }} · {{ a.purpose_label or 'purpose —' }} · fee {{ money(a.fee_amount) or '—' }}</span></label></li>
+    {% endfor %}</ul>
+    <button class="btn" style="margin-top:12px">{{ icon('plus') }} Selected ko sheet mein add karein</button>
+  </form>
+  {% else %}<p class="muted">Koi approved application intezar mein nahi.</p>{% endif %}
+  {% if s.rows and s.disbursed_amount < s.total_amount %}
+  <form method="post" action="{{ url_for('disbursement_mark_all', bid=b.id) }}" style="margin-top:14px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn light" data-confirm="Sab rows ko 'disbursed' mark karein?">✓ Sab ko disbursed mark karein</button></form>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

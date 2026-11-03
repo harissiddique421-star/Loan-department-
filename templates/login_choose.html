@@ -1,0 +1,21 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Login{% endblock %}
+{% block page %}
+<div class="auth">
+{% include "_auth_side.html" %}
+  <main class="auth-main">
+    <div class="portal-cards">
+      <img class="logo-sm" src="{{ url_for('static', filename='tooba-logo.png') }}" alt="Tooba Foundation" style="width:84px;margin:0 auto">
+      <h1 style="text-align:center">Khush aamdeed</h1>
+      <p class="muted" style="text-align:center;margin:0 0 6px">Apna section chunein</p>
+      {% for key, ic in [('admin', 'shield'), ('reviewer', 'check'), ('staff', 'user')] %}
+      {% set info = PORTAL_INFO[{'admin': 'Admin', 'reviewer': 'Reviewer', 'staff': 'Staff'}[key]] %}
+      <a class="portal-card portal-{{ key }} rise" style="--i:{{ loop.index }}" href="{{ url_for('login_portal', portal=key) }}">
+        <span class="ico">{{ icon(ic) }}</span>
+        <span><b>{{ info.login }}</b><small>{{ info.blurb }}</small></span>
+        <span class="ic-go">{{ icon('arrow') }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </main>
+</div>
+{% endblock %}

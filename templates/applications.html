@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% from "_app_table.html" import app_table %}{% block title %}{{ title }}{% endblock %}
+{% block content %}
+{% set colors = {'Draft':'#7b8a80','Submitted':'#2457c5','Pending Review':'#c27a0e','In Review':'#6b3fd1','Correction Required':'#a15c07','Submitted Again':'#2457c5','Approved':'#0e7a36','Rejected':'#c4372f','Ready for Disbursement':'#0b6a2e','Added to Disbursement Sheet':'#08551f','Disbursed':'#1b2f6e','Completed':'#1b2f6e'} %}
+{% set base_args = {'scope': scope} if scope else {} %}
+<div class="page-head rise">
+  <div><div class="eyebrow">{{ eyebrow }}</div><h1>{{ title }}</h1><p>{{ total }} {{ 'application' if total == 1 else 'applications' }}</p></div>
+  <div class="row no-print">
+    {% if scope and can('app.view_all') %}
+    <a class="btn {{ '' if scope == 'mine' else 'light' }} small" href="{{ url_for(list_endpoint, scope='mine') }}">Meri</a>
+    <a class="btn {{ '' if scope == 'all' else 'light' }} small" href="{{ url_for(list_endpoint, scope='all') }}">Sab (search)</a>
+    {% endif %}
+    {% if show_new %}<form method="post" action="{{ url_for('new_application') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn">{{ icon('plus') }} New Application</button></form>{% endif %}
+  </div>
+</div>
+
+<div class="stats">
+  <a class="stat rise {{ 'on' if not status }}" style="--i:1;--c:var(--navy)" href="{{ url_for(list_endpoint, q=q, **base_args) }}"><span class="lbl"><span class="dot"></span>All</span><b data-count="{{ total }}">{{ total }}</b></a>
+  {% for s in STATUSES if counts[s] or status == s %}<a class="stat rise {{ 'on' if status == s }}" style="--i:{{ loop.index + 1 }};--c:{{ colors[s] }}" href="{{ url_for(list_endpoint, status=s, q=q, **base_args) }}"><span class="lbl"><span class="dot"></span>{{ s }}</span><b data-count="{{ counts[s] }}">{{ counts[s] }}</b></a>{% endfor %}
+</div>
+
+<div class="card pad-0 rise" style="--i:9">
+  <form class="toolbar" method="get">
+    <div class="field-icon">{{ icon('search') }}<input name="q" value="{{ q }}" placeholder="Naam, CNIC, Application ID ya Loan No. se search karein" aria-label="Search"></div>
+    {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    {% if scope %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
+    <button class="btn navy">{{ icon('search') }} Search</button>
+    {% if q or status %}<a class="btn light" href="{{ url_for(list_endpoint, **base_args) }}">{{ icon('x') }} Clear</a>{% endif %}
+  </form>
+  {{ app_table(apps, names, 'Koi application nahi mili' if (q or status) else 'Abhi koi application nahi', 'Search ya filter badal kar dekhein.' if (q or status) else '') }}
+</div>
+
+{% if show_tools %}
+<div class="row no-print">
+  {% if can('export') %}
+  <a class="btn light small" href="{{ url_for('export_csv') }}">{{ icon('download') }} Export CSV (Excel)</a>
+  <a class="btn light small" href="{{ url_for('backup_export') }}">{{ icon('database') }} Download backup</a>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

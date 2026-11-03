@@ -272,6 +272,7 @@ async function downloadPDF() {
     const SCALE = 2, W = FORM_W * SCALE, H = FORM_H * SCALE;
     const pages = [];
     for (let p = 1; p <= PAGE_COUNT; p++) pages.push(renderPage(p, SCALE));
+    if (typeof window.renderCnicPage === 'function') pages.push(await window.renderCnicPage(SCALE));
     const enc = new TextEncoder();
     const parts = []; let pos = 0; const off = {};
     const addText = t => { const b = enc.encode(t); parts.push(b); pos += b.length; };
@@ -302,7 +303,7 @@ async function downloadPDF() {
     a.download = 'Tooba_Loan_Form_' + (PAYLOAD.appId || '') + (nm ? '_' + nm : '') + '.pdf';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    showMsg('PDF (3 pages) downloaded.');
+    showMsg('PDF (' + pages.length + ' pages) downloaded.');
   } catch (err) {
     console.error(err);
     showMsg('PDF download failed. Use Print → Save as PDF.', true);

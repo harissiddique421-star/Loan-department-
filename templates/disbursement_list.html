@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Disbursement Sheets{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">{{ portal.title }}</div><h1>Disbursement Sheets</h1>
+  <p>Har sheet ka apna Disbursement Number aur tareekh. Sirf approved applications add hoti hain.{% if ready %} <b>{{ ready }}</b> approved application(s) sheet ke intezar mein hain.{% endif %}</p></div></div>
+{% if can('disbursement.manage') %}
+<form class="card rise settings-row" style="--i:1" method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <b>{{ icon('plus') }} Nayi sheet</b>
+  <label class="muted">Disbursement Number <input class="num" name="number" value="{{ next_number }}" inputmode="numeric" required aria-label="Disbursement number"></label>
+  <label class="muted">Date <input type="date" name="disb_date" value="{{ today }}" required aria-label="Date"></label>
+  <input name="notes" placeholder="Note (optional)" maxlength="300" aria-label="Note">
+  <button class="btn small">{{ icon('plus') }} Create</button>
+</form>
+{% endif %}
+<div class="card pad-0 rise" style="--i:2">
+  {% if batches %}
+  <div class="overflow"><table>
+    <thead><tr><th>No.</th><th>Date</th><th>Month</th><th>Applicants</th><th>Total amount</th><th>Status</th><th></th></tr></thead>
+    <tbody>{% for b in batches %}
+    <tr><td><b>{{ b.number }}</b></td><td>{{ b.disb_date.strftime('%a, %d %b %Y') }}</td><td>{{ b.disb_date.strftime('%B %Y') }}</td>
+      <td>{{ summary[b.id][0] }}</td><td>Rs. {{ money(summary[b.id][1]) }}</td>
+      <td>{% if b.closed %}<span class="badge s-rejected">Closed</span>{% else %}<span class="badge s-approved">Open</span>{% endif %}</td>
+      <td style="text-align:right"><a class="btn small light" href="{{ url_for('disbursement_sheet', bid=b.id) }}">{{ icon('eye') }} Open</a></td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="empty"><div class="bubble">{{ icon('cash') }}</div><b>Abhi koi disbursement sheet nahi</b></div>{% endif %}
+</div>
+{% endblock %}

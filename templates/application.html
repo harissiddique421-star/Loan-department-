@@ -3,7 +3,7 @@
 {% set d = a.form_values %}
 <div class="page-head rise">
   <div>
-    <a class="muted" href="{{ url_for('dashboard') }}">{{ icon('back') }} Applications</a>
+    <a class="muted" href="{{ url_for(portal.list) }}">{{ icon('back') }} Applications</a>
   </div>
   <div class="row">
     {% if editable %}<a class="btn" href="{{ url_for('loan_form', app_id=a.id) }}">{{ icon('edit') }} Edit Form</a>{% endif %}
@@ -30,6 +30,7 @@
       <div class="title-line"><h1>{{ a.applicant_name or 'New applicant' }}</h1><span class="badge {{ a.status|slug }}">{{ a.status }}</span></div>
       <div class="meta"><span class="appid">{{ a.app_id }}</span>{% if a.loan_number %} · Loan No. <b>{{ a.loan_number }}</b>{% endif %} · Created {{ a.created_at.strftime('%d %b %Y, %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}{% if a.updated_by %} · Last updated {{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }} by {{ names.get(a.updated_by, '?') }}{% endif %}
         {% if a.reviewer_id %} · Reviewer: <b>{{ names.get(a.reviewer_id, '?') }}</b>{% endif %}</div>
+      {% if current_user.role == 'Reviewer' and a.reviewer_id != current_user.id %}<div class="warnbox">Ye application aapko assigned nahi.</div>{% endif %}
       {% if a.status == 'Rejected' and a.rejection_reason %}<div class="warnbox">Rejection reason: {{ a.rejection_reason }}</div>{% endif %}
       <div class="facts">
         <div class="fact">{{ icon('user') }}<div><small>Father / Husband</small><span>{{ d.get('father') or '—' }}</span></div></div>
@@ -44,7 +45,7 @@
         {% if transitions %}
         <form method="post" action="{{ url_for('update_status', app_id=a.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <select name="status" aria-label="New status">{% for s in transitions %}<option>{{ s }}</option>{% endfor %}</select>
+          <select name="status" aria-label="New status" required><option value="">Naya status chunein…</option>{% for s in transitions %}<option>{{ s }}</option>{% endfor %}</select>
           <input class="reason" name="reason" placeholder="Wajah (Reject / Correction ke liye zaroori)" aria-label="Reason" maxlength="2000">
           <button class="btn small">{{ icon('check') }} Update status</button>
         </form>
@@ -69,6 +70,66 @@
     </div>
   </div>
 </section>
+
+{% if problems and editable %}
+<div class="warnbox">Submit karne se pehle ye zaroori hai: {{ problems|join(', ') }}.</div>
+{% endif %}
+{% if entry %}
+<div class="warnbox" style="background:var(--green-50);border-color:var(--green-100);color:var(--green-700)">Ye application disbursement sheet par hai{% if can('disbursement.manage') or can('cheque.manage') %} — <a href="{{ url_for('disbursement_sheet', bid=entry.batch_id) }}">sheet kholein</a>{% endif %}.{% if entry.disbursed_at %} Raqam {{ entry.disbursed_at.strftime('%d %b %Y') }} ko ada hui.{% endif %}</div>
+{% endif %}
+
+<div class="two">
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('cash') }} Loan details</h2></div>
+  <dl class="kv">
+    <dt>Loan amount</dt><dd>{{ ('Rs. ' ~ money(a.loan_amount)) if a.loan_amount else '—' }}</dd>
+    <dt>Purpose</dt><dd>{{ a.purpose_label or '—' }}</dd>
+    <dt>Form fee</dt><dd>{{ ('Rs. ' ~ money(a.fee_amount)) if a.fee_amount is not none else '—' }}</dd>
+    <dt>Loan No.</dt><dd>{{ a.loan_number or '—' }}</dd>
+  </dl>
+  {% if can_details and not a.deleted_at %}
+  <form method="post" action="{{ url_for('save_details', app_id=a.id) }}" class="row" style="margin-top:12px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="purpose_id" aria-label="Purpose"><option value="">Purpose chunein</option>{% for p in purposes if p.active or p.id == a.purpose_id %}<option value="{{ p.id }}" {{ 'selected' if p.id == a.purpose_id }}>{{ p.name }}</option>{% endfor %}</select>
+    <select name="fee_category_id" aria-label="Form fee"><option value="">Form fee chunein</option>{% for f in fees if f.active or f.id == a.fee_category_id %}<option value="{{ f.id }}" {{ 'selected' if f.id == a.fee_category_id }}>Rs. {{ money(f.fee_amount) }}{% if f.loan_amount %} (loan {{ money(f.loan_amount) }}){% endif %}</option>{% endfor %}</select>
+    <button class="btn small">{{ icon('check') }} Save</button>
+  </form>
+  {% if a.status in ('Approved', 'Ready for Disbursement') %}<p class="muted">Approval ke baad raqam, purpose ya fee badalne se application dobara review ke liye jaye gi.</p>{% endif %}
+  {% endif %}
+</section>
+
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('id') }} CNIC Documents</h2>
+    {% if current_user.role == 'Admin' or (can('app.review') and a.reviewer_id == current_user.id) %}
+    <form method="post" action="{{ url_for('set_family_cnic', app_id=a.id) }}" class="row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="required" value="{{ '0' if a.family_cnic_required else '1' }}">
+      <button class="btn small light">{{ 'Family CNIC: zaroori — hatayein' if a.family_cnic_required else 'Family CNIC zaroori karein' }}</button>
+    </form>
+    {% else %}<span class="muted">Family CNIC: {{ 'zaroori' if a.family_cnic_required else 'zaroori nahi' }}</span>{% endif %}
+  </div>
+  <div class="cnic-grid">
+  {% for g, title, name_field in CNIC_GROUPS if g != 'fam' or a.family_cnic_required or cnic_docs['cnic_fam_front'] or cnic_docs['cnic_fam_back'] %}
+    <div class="cnic-row">
+      <b>{{ title }}{% if g == 'fam' and not a.family_cnic_required %} <span class="muted">(optional)</span>{% endif %}</b>
+      {% for side in ('front', 'back') %}{% set k = 'cnic_' ~ g ~ '_' ~ side %}{% set d = cnic_docs[k] %}
+      <div class="cnic-slot{{ ' has' if d }}">
+        <span class="cnic-side">{{ side|title }} Side</span>
+        {% if d %}<a href="{{ url_for('document', doc_id=d.id, inline=1) }}" target="_blank"><img src="{{ url_for('document', doc_id=d.id, inline=1) }}" alt="{{ title }} {{ side }}" loading="lazy"></a>{% else %}<span class="muted">Upload nahi</span>{% endif %}
+        {% if editable and can('doc.upload') %}
+        <form method="post" action="{{ url_for('upload', app_id=a.id) }}" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="kind" value="{{ k }}">
+          <label class="btn small light pick-file">{{ icon('upload') }} {{ 'Replace' if d else 'Upload' }}<input type="file" name="file" accept="image/*" data-shrink data-autosubmit hidden></label>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+  </div>
+  <p class="muted" style="margin:10px 0 0">Print / PDF mein ye sab ek "CNIC DOCUMENTS" page par aate hain. Replace karne par purani file history mein mehfooz rehti hai.</p>
+</section>
+</div>
 
 {% if notes or can_note %}
 <section class="card rise" style="--i:2">
@@ -118,7 +179,7 @@
         {% if doc.is_image %}<img src="{{ url_for('document', doc_id=doc.id, inline=1) }}" alt="" loading="lazy">{% else %}<span class="fileicon">{{ doc.original_name.rsplit('.',1)[-1]|upper }}</span>{% endif %}
       </a>
       <div class="info">
-        {% if doc.kind in PHOTO_LABELS %}<span class="tag">{{ PHOTO_LABELS[doc.kind] }}</span>{% endif %}
+        {% if doc.kind in PHOTO_LABELS %}<span class="tag">{{ PHOTO_LABELS[doc.kind] }}</span>{% elif doc.kind in CNIC_LABELS %}<span class="tag">{{ CNIC_LABELS[doc.kind] }}</span>{% endif %}
         <b>{{ doc.original_name }}</b>
         <span class="muted">{{ (doc.size // 1024) if doc.size else '?' }} KB · {{ names.get(doc.uploaded_by, '?') }}</span>
       </div>

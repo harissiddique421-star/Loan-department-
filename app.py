@@ -2,7 +2,7 @@ import os, json, secrets, csv, io, hashlib
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
-                   send_file, Response, jsonify, g, has_request_context)
+                   send_file, Response, jsonify, g, has_request_context, session)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
@@ -13,6 +13,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, PHOTO_KINDS,
                          PHOTO_LABELS)
+import gsheets
 
 app = Flask(__name__)
 
@@ -104,14 +105,34 @@ PERMISSIONS = {
     "disbursement.manage": "Disbursement sheet manage karna",
     "period.close": "Monthly period close / reopen karna",
     "gsheets.manage": "Google Sheets integration manage karna",
+    "cheque.manage": "Disbursement sheet par cheque number likhna / badalna",
     "users.manage": "Users, roles aur permissions manage karna",
     "app.purge": "Application hamesha ke liye mitana",
 }
-ADMIN_ONLY = {"users.manage", "app.purge"}          # never assignable to Staff/Reviewer
+# Admin-section powers are never assignable to Staff/Reviewer (their pages live under /admin).
+ADMIN_ONLY = {"users.manage", "app.purge", "app.delete", "app.restore", "app.assign", "reports.view",
+              "export", "audit.view", "settings.manage", "period.close", "gsheets.manage"}
+# disbursement.manage and cheque.manage stay assignable (e.g. Reviewers enter cheque numbers).
+
+# Three separate sections of the same site. One login system (the `user` table), one role
+# per account; each role has its own login page, dashboard, menu and URL area.
+PORTALS = {"admin": "Admin", "reviewer": "Reviewer", "staff": "Staff"}
+SECTION_OF_ROLE = {v: k for k, v in PORTALS.items()}
+PORTAL_INFO = {
+    "Admin": {"title": "Admin Panel", "login": "Admin Login", "home": "admin_dashboard",
+              "list": "admin_applications",
+              "blurb": "Users, permissions, saari applications, reports, audit log aur settings."},
+    "Reviewer": {"title": "Reviewer Desk", "login": "Reviewer Login", "home": "reviewer_dashboard",
+                 "list": "reviewer_applications",
+                 "blurb": "Assigned applications ka review, corrections, approve / reject."},
+    "Staff": {"title": "Staff Desk", "login": "Staff Login", "home": "staff_dashboard",
+              "list": "staff_applications",
+              "blurb": "Nayi application, draft, documents upload aur review ke liye submit."},
+}
 # Same defaults as the Phase 3 migration (tests check they match).
 DEFAULT_ROLE_PERMS = {
     "Staff": {"app.create", "app.edit_own", "app.view_all", "app.submit", "doc.upload"},
-    "Reviewer": {"app.review", "app.decide"},
+    "Reviewer": {"app.review", "app.decide", "cheque.manage"},
 }
 DEFAULT_TRANSITIONS = [
     ("Draft", "Submitted", "app.submit"),
@@ -130,6 +151,9 @@ DEFAULT_TRANSITIONS = [
     ("Added to Disbursement Sheet", "Ready for Disbursement", "disbursement.manage"),
     ("Added to Disbursement Sheet", "Disbursed", "disbursement.manage"),
     ("Disbursed", "Completed", "disbursement.manage"),
+    ("Approved", "Submitted Again", "app.edit_any"),
+    ("Ready for Disbursement", "Submitted Again", "app.edit_any"),
+    ("Rejected", "In Review", "app.decide"),
 ]
 DEFAULT_PURPOSES = ["Business", "Education", "Liberation", "Marriage", "Medical", "Construction", "Other"]
 DEFAULT_FEES = [(50000, 1700), (40000, 1500), (30000, 1300), (25000, 1200), (20000, 1100),
@@ -156,7 +180,36 @@ ACTION_LABELS = {
     "permissions.changed": "Permissions badlin",
     "export.csv": "CSV export kiya",
     "export.backup": "Backup download kiya",
+    "settings.purpose_added": "Purpose category add ki",
+    "settings.purpose_changed": "Purpose category badli",
+    "settings.fee_added": "Fee category add ki",
+    "settings.fee_changed": "Fee category badli",
+    "application.details": "Purpose / fee set ki",
+    "application.rereview": "Raqam badli — dobara review ke liye bheji",
+    "application.family_cnic": "Family CNIC ki zaroorat badli",
+    "disbursement.created": "Disbursement sheet banayi",
+    "disbursement.added": "Disbursement sheet mein add ki",
+    "disbursement.removed": "Disbursement sheet se nikali",
+    "disbursement.disbursed": "Raqam ada (disbursed) mark ki",
+    "disbursement.closed": "Disbursement sheet close ki",
+    "disbursement.reopened": "Disbursement sheet dobara kholi",
+    "cheque.saved": "Cheque number likha",
+    "cheque.status": "Cheque status badla",
+    "cheque.cancelled": "Cheque cancel kiya",
+    "gsheets.synced": "Google Sheets sync",
+    "gsheets.year_created": "Google yearly sheet banayi",
 }
+
+# Single combined CNIC DOCUMENTS page: (group, section title, form field holding the name)
+CNIC_GROUPS = [("app", "Applicant CNIC", "name"), ("w1", "First Witness CNIC", "g1name"),
+               ("w2", "Second Witness CNIC", "g2name"), ("fam", "Family Member CNIC", None)]
+CNIC_KINDS = [f"cnic_{g}_{side}" for g, _, _ in CNIC_GROUPS for side in ("front", "back")]
+CNIC_LABELS = {f"cnic_{g}_{side}": f"{title} — {side.title()} Side"
+               for g, title, _ in CNIC_GROUPS for side in ("front", "back")}
+IMAGE_KINDS = set(PHOTO_KINDS) | set(CNIC_KINDS)
+SLOT_KINDS = list(PHOTO_KINDS) + CNIC_KINDS          # one current picture per slot
+FINANCIAL_LOCKED = {"Added to Disbursement Sheet", "Disbursed", "Completed"}
+REREVIEW_FROM = {"Approved", "Ready for Disbursement"}
 
 ALLOWED_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
@@ -347,6 +400,94 @@ class ReviewNote(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
 
+class DisbursementBatch(db.Model):
+    __tablename__ = "disbursement_batch"
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.Integer, unique=True, nullable=False)
+    disb_date = db.Column(db.Date, nullable=False)
+    month = db.Column(db.Integer, nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(10), default="open", nullable=False)
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    closed_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    closed_at = db.Column(db.DateTime)
+    reopened_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    reopened_at = db.Column(db.DateTime)
+    reopen_reason = db.Column(db.Text)
+
+    @property
+    def closed(self):
+        return self.status == "closed"
+
+
+class DisbursementEntry(db.Model):
+    __tablename__ = "disbursement_entry"
+    id = db.Column(db.Integer, primary_key=True)
+    batch_id = db.Column(db.Integer, db.ForeignKey("disbursement_batch.id"), nullable=False)
+    application_id = db.Column(db.Integer, db.ForeignKey("application.id"), nullable=False)
+    name = db.Column(db.String(200))
+    cnic = db.Column(db.String(30))
+    phone = db.Column(db.String(30))
+    amount = db.Column(db.Numeric(12, 2))
+    purpose = db.Column(db.String(80))
+    loan_number = db.Column(db.String(30))
+    fee_amount = db.Column(db.Numeric(12, 2))
+    added_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    added_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    disbursed_at = db.Column(db.DateTime)
+    disbursed_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    removed_at = db.Column(db.DateTime)
+    removed_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    remove_reason = db.Column(db.Text)
+
+
+class Cheque(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey("disbursement_entry.id"), nullable=False)
+    cheque_no = db.Column(db.String(40), nullable=False)
+    status = db.Column(db.String(12), default="Issued", nullable=False)
+    cancel_reason = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    updated_at = db.Column(db.DateTime)
+    cancelled_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    cancelled_at = db.Column(db.DateTime)
+
+
+class GsheetYear(db.Model):
+    __tablename__ = "gsheet_year"
+    year = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    spreadsheet_id = db.Column(db.String(100))
+    url = db.Column(db.Text)
+    tab_ids = db.Column(db.JSON)
+    status = db.Column(db.String(10), default="creating", nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class GsheetSync(db.Model):
+    __tablename__ = "gsheet_sync"
+    year = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    month = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    dirty = db.Column(db.Boolean, default=True, nullable=False)
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    last_error = db.Column(db.Text)
+    requested_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    synced_at = db.Column(db.DateTime)
+
+
+class GsheetSyncLog(db.Model):
+    __tablename__ = "gsheet_sync_log"
+    id = db.Column(db.Integer, primary_key=True)
+    year = db.Column(db.Integer)
+    month = db.Column(db.Integer)
+    ok = db.Column(db.Boolean, nullable=False)
+    message = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
 class AppIdCounter(db.Model):
     """Used only on SQLite; PostgreSQL uses the next_app_id() database function."""
     __tablename__ = "app_id_counter"
@@ -403,8 +544,8 @@ def save_file(app_row, f, kind):
     ext = os.path.splitext(original)[1].lower()
     if ext not in ALLOWED_EXT:
         return None, "Sirf PDF, JPG, PNG, WEBP, DOC, DOCX allowed hain."
-    if kind in PHOTO_KINDS and ext not in IMAGE_EXT:
-        return None, "Photo ke liye JPG, PNG ya WEBP file chunein."
+    if kind in IMAGE_KINDS and ext not in IMAGE_EXT:
+        return None, "Photo / CNIC ke liye JPG, PNG ya WEBP file chunein."
     blob = f.read()
     if not blob:
         return None, "File khaali hai."
@@ -549,7 +690,9 @@ def allowed_transitions(a):
     if a.deleted_at:
         return []
     if current_user.role == "Admin":
-        return [s for s in STATUSES if s != a.status]
+        # sheet statuses change only through the disbursement sheet, so sheet and status always agree
+        sheet_only = {"Added to Disbursement Sheet", "Disbursed"}
+        return [s for s in STATUSES if s != a.status and s not in sheet_only]
     out = []
     for t in StatusTransition.query.filter_by(from_status=a.status).all():
         if not can(t.permission):
@@ -605,12 +748,41 @@ def slug(s):
     return "s-" + "".join(ch if ch.isalnum() else "-" for ch in (s or "")).lower()
 
 
+def nav_items(role):
+    """Each role gets its own menu; no role ever sees another role's links."""
+    if role == "Admin":
+        return [("admin_dashboard", "Dashboard", "grid", ()),
+                ("admin_applications", "Applications", "files",
+                 ("view_application", "loan_form", "print_application")),
+                ("users", "Staff & Reviewers", "users", ()),
+                ("permissions", "Permissions", "key", ()),
+                ("admin_settings", "Settings", "database", ()),
+                ("disbursement_list", "Disbursement", "cash", ("disbursement_sheet",)),
+                ("reports", "Reports", "chart", ()),
+                ("audit_log", "Audit Log", "clock", ()),
+                ("google_sheets", "Google Sheets", "refresh", ()),
+                ("deleted_applications", "Deleted", "trash", ())]
+    sheets = ([("disbursement_list", "Disbursement Sheets", "cash", ("disbursement_sheet",))]
+              if can("disbursement.manage") or can("cheque.manage") else [])
+    if role == "Reviewer":
+        return [("reviewer_dashboard", "Dashboard", "grid", ()),
+                ("reviewer_applications", "Assigned Applications", "files",
+                 ("view_application", "print_application"))] + sheets
+    return [("staff_dashboard", "Dashboard", "grid", ()),
+            ("staff_applications", "My Applications", "files",
+             ("view_application", "loan_form", "print_application"))] + sheets
+
+
 @app.context_processor
 def inject_globals():
+    role = current_user.role if current_user and current_user.is_authenticated else None
     return {"STATUSES": STATUSES, "USING_SQLITE": USING_SQLITE, "ON_VERCEL": ON_VERCEL,
             "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS,
             "PHOTO_SLOTS": PHOTO_SLOTS, "PHOTO_LABELS": PHOTO_LABELS, "can": can,
-            "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES}
+            "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES, "PORTAL_INFO": PORTAL_INFO,
+            "CNIC_GROUPS": CNIC_GROUPS, "CNIC_LABELS": CNIC_LABELS, "money": money,
+            "portal": PORTAL_INFO.get(role), "portal_key": SECTION_OF_ROLE.get(role),
+            "nav": nav_items(role) if role else []}
 
 
 MIGRATION_PENDING = False
@@ -623,36 +795,82 @@ def migration_gate():
                                msg="Database ka naya update abhi apply nahi hua. Admin se rabta karein."), 503
 
 
+SECTION_PREFIX = {"/admin": "Admin", "/reviewer": "Reviewer", "/staff": "Staff"}
+
+
+@app.before_request
+def section_gate():
+    """Keep the three sections apart on the server, whatever URL is typed in."""
+    if request.endpoint in (None, "static"):
+        return None
+    if current_user.is_authenticated and session.get("portal") != current_user.role:
+        # role changed by Admin, or session from before sections existed: log in again
+        logout_user()
+        session.pop("portal", None)
+        flash("Dobara login karein.")
+        return redirect(url_for("login"))
+    for prefix, role in SECTION_PREFIX.items():
+        if request.path == prefix or request.path.startswith(prefix + "/"):
+            if not current_user.is_authenticated:
+                return redirect(url_for("login_portal", portal=SECTION_OF_ROLE[role]))
+            if current_user.role != role:
+                abort(403)
+    return None
+
+
 # ---------------------------------------------------------------- auth
+def home_url():
+    return url_for(PORTAL_INFO[current_user.role]["home"])
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    """Entry page with the three separate sections."""
     if current_user.is_authenticated:
-        return redirect(url_for("dashboard"))
+        return redirect(home_url())
+    return render_template("login_choose.html")
+
+
+@app.route("/login/<portal>", methods=["GET", "POST"])
+def login_portal(portal):
+    role = PORTALS.get(portal)
+    if not role:
+        abort(404)
+    if current_user.is_authenticated:
+        return redirect(home_url())
+    info = PORTAL_INFO[role]
     if request.method == "POST":
         username = request.form.get("username", "").strip()[:80]
         ip = client_ip()
         if login_blocked(username, ip):
             flash(f"Bohat zyada ghalat koshishein. {int(LOGIN_WINDOW.total_seconds() // 60)} minute baad try karein.")
-            return render_template("login.html"), 429
+            return render_template("login.html", portal_key=portal, info=info), 429
         u = User.query.filter_by(username=username).first()
         password = request.form.get("password", "")
         # Always run one hash check so response time doesn't reveal which usernames exist.
         ok = u.check_password(password) if u else (check_password_hash(_DUMMY_HASH, password) and False)
         if u and u.active and not u.deleted_at and ok:
+            if u.role != role:
+                log_security(f"LOGIN_WRONG_SECTION user={username[:60]} section={portal} ip={ip}", user_id=u.id)
+                flash(f"Ye account {info['title']} ka nahi hai. Apne section ka login istemal karein.")
+                return render_template("login.html", portal_key=portal, info=info), 403
             login_user(u)
+            session["portal"] = u.role
             set_db_actor(u)
-            log_security("Login ip=" + ip, user_id=u.id)
-            return redirect(url_for("dashboard"))
+            log_security(f"Login section={portal} ip={ip}", user_id=u.id)
+            return redirect(url_for(info["home"]))
         log_security(f"LOGIN_FAIL user={username[:60]} ip={ip}", user_id=u.id if u else None)
         flash("Username ya password ghalat hai, ya account disabled hai.")
-    return render_template("login.html")
+    return render_template("login.html", portal_key=portal, info=info)
 
 
 @app.route("/logout", methods=["POST"])
 @login_required
 def logout():
+    section = SECTION_OF_ROLE.get(current_user.role, "staff")
     logout_user()
-    return redirect(url_for("login"))
+    session.pop("portal", None)
+    return redirect(url_for("login_portal", portal=section))
 
 
 @app.route("/account/password", methods=["GET", "POST"])
@@ -671,8 +889,9 @@ def change_password():
             audit("user.password_changed", entity="user", entity_id=me.id)
             db.session.commit()
             login_user(me)   # keep this session; all other sessions are now logged out
+            session["portal"] = me.role
             flash("Password change ho gaya.")
-            return redirect(url_for("dashboard"))
+            return redirect(home_url())
     return render_template("change_password.html")
 
 
@@ -680,25 +899,126 @@ def change_password():
 @app.route("/")
 @login_required
 def dashboard():
+    """Old address: sends each user to their own section."""
+    return redirect(home_url())
+
+
+def search(query, q):
+    if not q:
+        return query
+    like = f"%{q}%"
+    digits = "".join(ch for ch in q if ch.isdigit())
+    conds = [Application.applicant_name.ilike(like), Application.app_id.ilike(like),
+             Application.loan_number.ilike(like), Application.cnic.ilike(like)]
+    if digits and digits != q:
+        conds.append(Application.cnic.ilike(f"%{digits}%"))   # "42501-1470957-1" finds stored digits
+    return query.filter(or_(*conds))
+
+
+def list_page(base, title, eyebrow, endpoint, **extra):
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
-    base = visible_apps().filter(Application.deleted_at.is_(None))
     counts = {s: base.filter(Application.status == s).count() for s in STATUSES}
     total = base.count()
-    query = base
-    if q:
-        like = f"%{q}%"
-        digits = "".join(ch for ch in q if ch.isdigit())
-        conds = [Application.applicant_name.ilike(like), Application.app_id.ilike(like),
-                 Application.loan_number.ilike(like), Application.cnic.ilike(like)]
-        if digits and digits != q:
-            conds.append(Application.cnic.ilike(f"%{digits}%"))   # "42501-1470957-1" finds stored digits
-        query = query.filter(or_(*conds))
+    query = search(base, q)
     if status:
         query = query.filter(Application.status == status)
     apps = query.order_by(Application.updated_at.desc()).limit(200).all()
-    return render_template("dashboard.html", apps=apps, total=total, counts=counts, q=q,
-                           status=status, names=usernames())
+    return render_template("applications.html", apps=apps, total=total, counts=counts, q=q, status=status,
+                           names=usernames(), title=title, eyebrow=eyebrow, list_endpoint=endpoint,
+                           extra_args={k: v for k, v in extra.items() if k.startswith("arg_")}, **extra)
+
+
+def live(query):
+    return query.filter(Application.deleted_at.is_(None))
+
+
+# ------------------------------- Admin section
+@app.route("/admin")
+@login_required
+def admin_dashboard():
+    base = live(Application.query)
+    counts = {s: base.filter(Application.status == s).count() for s in STATUSES}
+    queue = (base.filter(or_(Application.status.in_(["Submitted", "Submitted Again"]),
+                             (Application.status == "Pending Review") & Application.reviewer_id.is_(None)))
+             .order_by(Application.updated_at.desc()).limit(20).all())
+    users_by_role = {r: User.query.filter(User.role == r, User.active.is_(True)).count() for r in ROLES}
+    recent_audit = AuditLog.query.order_by(AuditLog.id.desc()).limit(12).all()
+    recent = base.order_by(Application.updated_at.desc()).limit(8).all()
+    return render_template("admin_dashboard.html", counts=counts, total=base.count(), queue=queue,
+                           users_by_role=users_by_role, recent_audit=recent_audit, recent=recent,
+                           names=usernames())
+
+
+@app.route("/admin/applications")
+@login_required
+def admin_applications():
+    return list_page(live(visible_apps()), "Saari applications", "Admin", "admin_applications",
+                     show_new=can("app.create"), show_tools=True)
+
+
+# ------------------------------- Reviewer section
+def assigned_to_me():
+    return live(Application.query.filter(Application.reviewer_id == current_user.id))
+
+
+@app.route("/reviewer")
+@login_required
+def reviewer_dashboard():
+    base = assigned_to_me()
+    waiting = (base.filter(Application.status.in_(["Submitted", "Pending Review", "Submitted Again"]))
+               .order_by(Application.updated_at).all())
+    in_review = base.filter(Application.status == "In Review").order_by(Application.updated_at).all()
+    stats = {"assigned": base.count(), "waiting": len(waiting), "in_review": len(in_review),
+             "correction": base.filter(Application.status == "Correction Required").count(),
+             "approved": base.filter(Application.approved_by == current_user.id).count(),
+             "rejected": base.filter(Application.status == "Rejected").count()}
+    return render_template("reviewer_dashboard.html", waiting=waiting, in_review=in_review, stats=stats,
+                           names=usernames())
+
+
+@app.route("/reviewer/applications")
+@login_required
+def reviewer_applications():
+    return list_page(assigned_to_me(), "Mujhe assigned applications", "Reviewer", "reviewer_applications")
+
+
+# ------------------------------- Staff section
+def my_apps():
+    uid = current_user.id
+    return live(Application.query.filter(or_(Application.created_by == uid, Application.assigned_to == uid)))
+
+
+@app.route("/staff")
+@login_required
+def staff_dashboard():
+    base = my_apps()
+    corrections = base.filter(Application.status == "Correction Required").order_by(Application.updated_at).all()
+    open_notes = {}
+    for a in corrections:
+        n = (ReviewNote.query.filter_by(application_id=a.id, kind="correction", resolved_at=None)
+             .order_by(ReviewNote.id.desc()).first())
+        open_notes[a.id] = n.body if n else ""
+    drafts = base.filter(Application.status == "Draft").order_by(Application.updated_at.desc()).all()
+    progress = ["Submitted", "Pending Review", "In Review", "Submitted Again"]
+    done = ["Approved", "Ready for Disbursement", "Added to Disbursement Sheet", "Disbursed", "Completed"]
+    stats = {"total": base.count(), "drafts": len(drafts), "corrections": len(corrections),
+             "progress": base.filter(Application.status.in_(progress)).count(),
+             "approved": base.filter(Application.status.in_(done)).count(),
+             "rejected": base.filter(Application.status == "Rejected").count()}
+    recent = base.order_by(Application.updated_at.desc()).limit(10).all()
+    return render_template("staff_dashboard.html", corrections=corrections, open_notes=open_notes,
+                           drafts=drafts, stats=stats, recent=recent, names=usernames())
+
+
+@app.route("/staff/applications")
+@login_required
+def staff_applications():
+    scope = "all" if request.args.get("scope") == "all" and can("app.view_all") else "mine"
+    base = live(visible_apps()) if scope == "all" else my_apps()
+    title = "Saari applications (search)" if scope == "all" else "Meri applications"
+    return list_page(base, title, "Staff", "staff_applications", show_new=can("app.create"),
+                     scope=scope, arg_scope=scope)
 
 
 @app.route("/application/new", methods=["POST", "GET"])
@@ -732,7 +1052,7 @@ def history_for(a):
 @login_required
 def view_application(app_id):
     a = get_app(app_id, allow_deleted=True)
-    docs = a.active_docs().all()
+    docs = [d for d in a.active_docs().all() if d.kind not in CNIC_KINDS]   # CNICs have their own card
     notes = ReviewNote.query.filter_by(application_id=a.id).order_by(ReviewNote.id.desc()).all()
     if not can("app.review"):
         notes = [n for n in notes if n.kind != "note"]
@@ -744,6 +1064,12 @@ def view_application(app_id):
                            editable=can_edit_form(a),
                            can_note=can("app.review") and (current_user.role == "Admin"
                                                             or a.reviewer_id == current_user.id),
+                           cnic_docs={k: a.latest_photo(k) for k in CNIC_KINDS},
+                           purposes=PurposeCategory.query.order_by(PurposeCategory.sort_order).all(),
+                           fees=FeeCategory.query.order_by(FeeCategory.sort_order).all(),
+                           can_details=a.status not in FINANCIAL_LOCKED and (can_edit_form(a) or can("app.edit_any")),
+                           problems=submit_problems(a) if a.status in EDITABLE_STATUSES else [],
+                           entry=DisbursementEntry.query.filter_by(application_id=a.id, removed_at=None).first(),
                            duplicates=cnic_matches(a.cnic, a.id))
 
 
@@ -754,11 +1080,73 @@ def edit_application(app_id):
     return redirect(url_for("view_application", app_id=app_id))
 
 
-def form_payload(a):
-    """Everything static/loanform.js needs to draw the 3 scanned pages."""
-    return {"appId": a.app_id, "values": a.form_values,
-            "photos": {k: url_for("document", doc_id=p.id, inline=1)
-                       for k in PHOTO_KINDS if (p := a.latest_photo(k))}}
+def form_payload(a, with_cnic=False):
+    """Everything static/loanform.js needs to draw the 3 scanned pages (+ the CNIC page)."""
+    payload = {"appId": a.app_id, "values": a.form_values,
+               "photos": {k: url_for("document", doc_id=p.id, inline=1)
+                          for k in PHOTO_KINDS if (p := a.latest_photo(k))}}
+    if with_cnic:
+        payload["cnic"] = cnic_page_rows(a)
+    return payload
+
+
+def cnic_groups_for(a):
+    return [grp for grp in CNIC_GROUPS if grp[0] != "fam" or a.family_cnic_required]
+
+
+def cnic_page_rows(a):
+    """Rows for the single CNIC DOCUMENTS page. Family Member only when the reviewer requires it."""
+    vals = a.form_values
+    rows = []
+    for i, (g, title, name_field) in enumerate(cnic_groups_for(a), 1):
+        row = {"section": i, "title": title.upper(), "name": vals.get(name_field, "") if name_field else ""}
+        for side in ("front", "back"):
+            d = a.latest_photo(f"cnic_{g}_{side}")
+            row[side] = url_for("document", doc_id=d.id, inline=1) if d else None
+        rows.append(row)
+    return rows
+
+
+def required_kinds(a):
+    return [f"cnic_{g}_{side}" for g, _, _ in cnic_groups_for(a) for side in ("front", "back")]
+
+
+def submit_problems(a):
+    have = {d.kind for d in a.active_docs().all()}
+    out = [CNIC_LABELS[k] for k in required_kinds(a) if k not in have]
+    if not a.loan_amount:
+        out.append("Loan amount")
+    if not a.purpose_id:
+        out.append("Loan purpose")
+    if a.fee_amount is None:
+        out.append("Form fee")
+    return out
+
+
+def auto_fee(a):
+    """Pick the fee slab whose loan amount matches (only when none chosen yet)."""
+    if a.fee_category_id or not a.loan_amount:
+        return
+    f = FeeCategory.query.filter(FeeCategory.active.is_(True), FeeCategory.loan_amount == a.loan_amount).first()
+    if f:
+        a.fee_category_id, a.fee_amount = f.id, f.fee_amount
+
+
+def send_for_rereview(a, why):
+    old = a.status
+    a.status = "Submitted Again"
+    a.approved_by = a.approved_at = None
+    a.submitted_at = datetime.utcnow()
+    audit("application.rereview", a, reason=why, old={"status": old}, new={"status": a.status})
+
+
+def money(v):
+    if v is None or v == "":
+        return ""
+    try:
+        return f"{int(round(float(v))):,}"
+    except (TypeError, ValueError):
+        return str(v)
 
 
 def replace_photo(a, kind, f):
@@ -839,8 +1227,17 @@ def loan_form(app_id):
 
     changed = {k: [before.get(k, ""), values.get(k, "")] for k in FIELD_NAMES
                if (before.get(k) or "") != (values.get(k) or "")}
+    new_amount = parse_amount(values.get("amount"))
+    if a.status in FINANCIAL_LOCKED and new_amount != (int(a.loan_amount) if a.loan_amount is not None else None):
+        db.session.rollback()
+        return fail("Ye application disbursement sheet par hai; raqam badalne se pehle use sheet se nikalein.")
+    money_changed = new_amount != (int(a.loan_amount) if a.loan_amount is not None else None)
     a.applicant_name, a.cnic = values["name"], cnic
-    a.loan_amount = parse_amount(values.get("amount"))
+    a.loan_amount = new_amount
+    if money_changed:
+        auto_fee(a)
+        if a.status in REREVIEW_FROM:
+            send_for_rereview(a, "Loan amount badla")
     a.form_json = json.dumps(values, ensure_ascii=False)
     a.updated_by, a.updated_at = current_user.id, datetime.utcnow()
     a.version = (a.version or 1) + 1
@@ -867,7 +1264,7 @@ def print_application(app_id):
     a = get_app(app_id)
     audit("application.printed", a)
     db.session.commit()
-    return render_template("print.html", a=a, payload=form_payload(a))
+    return render_template("print.html", a=a, payload=form_payload(a, with_cnic=True))
 
 
 @app.route("/application/<int:app_id>/status", methods=["POST"])
@@ -881,6 +1278,11 @@ def update_status(app_id):
     if s in REASON_REQUIRED and not reason:
         flash("Is status ke liye wajah (reason) likhna zaroori hai.")
         return redirect(url_for("view_application", app_id=a.id))
+    if s in ("Submitted", "Submitted Again"):
+        problems = submit_problems(a)
+        if problems:
+            flash("Submit nahi ho saki — ye zaroori hai: " + "; ".join(problems))
+            return redirect(url_for("view_application", app_id=a.id))
     old = a.status
     now = datetime.utcnow()
     if s == "Rejected":
@@ -981,7 +1383,7 @@ def delete_application(app_id):
     audit("application.deleted", a, reason=request.form.get("reason", "").strip() or None)
     db.session.commit()
     flash(a.app_id + " delete ho gayi (Admin isse 'Deleted' list se wapas la sakta hai).")
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("admin_applications"))
 
 
 @app.route("/admin/deleted")
@@ -1011,7 +1413,7 @@ def upload(app_id):
     a = get_app(app_id)
     if not can_edit_form(a):
         abort(403)
-    kind = request.form.get("kind") if request.form.get("kind") in PHOTO_KINDS else "document"
+    kind = request.form.get("kind") if request.form.get("kind") in SLOT_KINDS else "document"
     files = [f for f in request.files.getlist("file") if f and f.filename]
     if not files:
         flash("File select karein.")
@@ -1170,6 +1572,108 @@ def permissions():
     return render_template("permissions.html", assignable=assignable, current=current, labels=PERMISSIONS)
 
 
+@app.route("/admin/settings")
+@requires("settings.manage")
+def admin_settings():
+    return render_template("settings.html",
+                           purposes=PurposeCategory.query.order_by(PurposeCategory.sort_order, PurposeCategory.id).all(),
+                           fees=FeeCategory.query.order_by(FeeCategory.sort_order, FeeCategory.id).all())
+
+
+def _money(v):
+    try:
+        x = float(str(v).replace(",", "").strip())
+        return x if x >= 0 else None
+    except ValueError:
+        return None
+
+
+@app.route("/admin/settings/purpose", methods=["POST"])
+@app.route("/admin/settings/purpose/<int:pid>", methods=["POST"])
+@requires("settings.manage")
+def save_purpose(pid=None):
+    name = request.form.get("name", "").strip()[:80]
+    if not name:
+        flash("Naam zaroori hai.")
+        return redirect(url_for("admin_settings"))
+    clash = PurposeCategory.query.filter(PurposeCategory.name == name, PurposeCategory.id != (pid or 0)).first()
+    if clash:
+        flash(f"'{name}' pehle se mojood hai.")
+        return redirect(url_for("admin_settings"))
+    if pid:
+        p = db.get_or_404(PurposeCategory, pid)
+        old = {"name": p.name, "active": p.active}
+        p.name, p.active = name, request.form.get("active") == "1"
+        audit("settings.purpose_changed", entity="purpose_category", entity_id=p.id, old=old,
+              new={"name": p.name, "active": p.active})
+    else:
+        top = db.session.query(db.func.max(PurposeCategory.sort_order)).scalar() or 0
+        p = PurposeCategory(name=name, sort_order=top + 1)
+        db.session.add(p)
+        db.session.flush()
+        audit("settings.purpose_added", entity="purpose_category", entity_id=p.id, new={"name": name})
+    db.session.commit()
+    flash("Purpose save ho gaya. Purani applications par likha purpose nahi badalta.")
+    return redirect(url_for("admin_settings"))
+
+
+@app.route("/admin/settings/fee", methods=["POST"])
+@app.route("/admin/settings/fee/<int:fid>", methods=["POST"])
+@requires("settings.manage")
+def save_fee(fid=None):
+    name = request.form.get("name", "").strip()[:80]
+    fee = _money(request.form.get("fee_amount", ""))
+    loan = _money(request.form.get("loan_amount", "")) if request.form.get("loan_amount", "").strip() else None
+    if not name or fee is None:
+        flash("Naam aur sahih fee amount zaroori hai.")
+        return redirect(url_for("admin_settings"))
+    clash = FeeCategory.query.filter(FeeCategory.name == name, FeeCategory.id != (fid or 0)).first()
+    if clash:
+        flash(f"'{name}' pehle se mojood hai.")
+        return redirect(url_for("admin_settings"))
+    if fid:
+        f = db.get_or_404(FeeCategory, fid)
+        old = {"name": f.name, "loan_amount": float(f.loan_amount) if f.loan_amount is not None else None,
+               "fee_amount": float(f.fee_amount), "active": f.active}
+        f.name, f.loan_amount, f.fee_amount = name, loan, fee
+        f.active = request.form.get("active") == "1"
+        audit("settings.fee_changed", entity="fee_category", entity_id=f.id, old=old,
+              new={"name": name, "loan_amount": loan, "fee_amount": fee, "active": f.active})
+    else:
+        top = db.session.query(db.func.max(FeeCategory.sort_order)).scalar() or 0
+        f = FeeCategory(name=name, loan_amount=loan, fee_amount=fee, sort_order=top + 1)
+        db.session.add(f)
+        db.session.flush()
+        audit("settings.fee_added", entity="fee_category", entity_id=f.id,
+              new={"name": name, "loan_amount": loan, "fee_amount": fee})
+    db.session.commit()
+    flash("Fee category save ho gayi. Purani applications ki fee wahi rehti hai jo us waqt lagi thi.")
+    return redirect(url_for("admin_settings"))
+
+
+@app.route("/admin/audit")
+@requires("audit.view")
+def audit_log():
+    q = AuditLog.query
+    action = request.args.get("action", "").strip()
+    actor = request.args.get("actor", "").strip()
+    app_ref = request.args.get("app", "").strip()
+    if action:
+        q = q.filter(AuditLog.action == action)
+    if actor:
+        q = q.filter(AuditLog.actor_name.ilike(f"%{actor}%"))
+    if app_ref:
+        ids = [a.id for a in Application.query.filter(or_(Application.app_id.ilike(f"%{app_ref}%"),
+                                                           Application.loan_number.ilike(f"%{app_ref}%")))]
+        q = q.filter(AuditLog.application_id.in_(ids or [-1]))
+    page = max(1, request.args.get("page", 1, type=int))
+    rows = q.order_by(AuditLog.id.desc()).offset((page - 1) * 100).limit(101).all()
+    app_ids = {a.id: a.app_id for a in Application.query.filter(
+        Application.id.in_({r.application_id for r in rows if r.application_id} or {-1}))}
+    return render_template("audit.html", rows=rows[:100], more=len(rows) > 100, page=page, app_ids=app_ids,
+                           action=action, actor=actor, app_ref=app_ref)
+
+
 @app.route("/admin/export")
 @requires("export")
 def export_csv():
@@ -1193,14 +1697,27 @@ def export_csv():
 @app.route("/admin/reports")
 @requires("reports.view")
 def reports():
-    from sqlalchemy import func
-    live = Application.deleted_at.is_(None)
-    by_status = (db.session.query(Application.status, func.count(Application.id)).filter(live)
-                 .group_by(Application.status).all())
-    by_staff = (db.session.query(User.username, func.count(Application.id))
-                .outerjoin(Application, (Application.assigned_to == User.id) & live).group_by(User.id).all())
-    return render_template("reports.html", by_status=by_status, by_staff=by_staff,
-                           total=Application.query.filter(live).count())
+    year = request.args.get("year", type=int) or (datetime.utcnow() + timedelta(hours=5)).year
+    return render_template("reports.html", r=report_data(year))
+
+
+@app.route("/admin/reports/export")
+@requires("reports.view")
+def reports_export():
+    kind = request.args.get("kind", "monthly")
+    if kind not in REPORT_COLUMNS:
+        abort(404)
+    year = request.args.get("year", type=int) or (datetime.utcnow() + timedelta(hours=5)).year
+    data = report_data(year)[kind]
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([label for _, label in REPORT_COLUMNS[kind]])
+    for row in data:
+        w.writerow([csv_safe(row.get(k, "")) for k, _ in REPORT_COLUMNS[kind]])
+    audit("export.csv", new={"report": kind, "year": year})
+    db.session.commit()
+    return Response("\ufeff" + out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=report-{kind}-{year}.csv"})
 
 
 @app.route("/admin/backup")
@@ -1226,6 +1743,719 @@ def backup_export():
     resp = jsonify(payload)
     resp.headers["Content-Disposition"] = "attachment; filename=tooba-backup.json"
     return resp
+
+
+# ---------------------------------------------------------------- application: details, family CNIC
+@app.route("/application/<int:app_id>/details", methods=["POST"])
+@login_required
+def save_details(app_id):
+    """Purpose and form fee. The chosen label/amount are copied onto the application, so
+    later changes to the categories never change this application's history."""
+    a = get_app(app_id)
+    back = redirect(url_for("view_application", app_id=a.id))
+    if not (can_edit_form(a) or (can("app.edit_any") and a.status not in FINANCIAL_LOCKED)):
+        abort(403)
+    if a.status in FINANCIAL_LOCKED:
+        flash("Ye application disbursement sheet par hai; pehle use sheet se nikalein.")
+        return back
+    pid, fid = request.form.get("purpose_id", ""), request.form.get("fee_category_id", "")
+    p = db.session.get(PurposeCategory, int(pid)) if pid.isdigit() else None
+    f = db.session.get(FeeCategory, int(fid)) if fid.isdigit() else None
+    old = {"purpose": a.purpose_label, "fee": money(a.fee_amount)}
+    if p and (p.active or p.id == a.purpose_id):
+        a.purpose_id, a.purpose_label = p.id, p.name
+    if f and (f.active or f.id == a.fee_category_id):
+        a.fee_category_id, a.fee_amount = f.id, f.fee_amount
+    new = {"purpose": a.purpose_label, "fee": money(a.fee_amount)}
+    if new != old:
+        a.updated_by, a.updated_at = current_user.id, datetime.utcnow()
+        audit("application.details", a, old=old, new=new)
+        if a.status in REREVIEW_FROM:
+            send_for_rereview(a, "Purpose / fee badli")
+        db.session.commit()
+        flash("Purpose / fee save ho gayi.")
+    return back
+
+
+@app.route("/application/<int:app_id>/family-cnic", methods=["POST"])
+@login_required
+def set_family_cnic(app_id):
+    a = get_app(app_id)
+    if not (current_user.role == "Admin" or (can("app.review") and a.reviewer_id == current_user.id)):
+        abort(403)
+    want = request.form.get("required") == "1"
+    if want != a.family_cnic_required:
+        a.family_cnic_required = want
+        audit("application.family_cnic", a, old={"required": not want}, new={"required": want})
+        db.session.commit()
+        flash("Family Member CNIC ab " + ("zaroori hai." if want else "zaroori nahi."))
+    return redirect(url_for("view_application", app_id=a.id))
+
+
+# ---------------------------------------------------------------- disbursement sheets
+def ordinal(n):
+    n = int(n)
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def fmt_cnic(c):
+    d = "".join(ch for ch in (c or "") if ch.isdigit())
+    return f"{d[:5]}-{d[5:12]}-{d[12]}" if len(d) == 13 else (c or "")
+
+
+def requires_sheet_access(fn):
+    @wraps(fn)
+    @login_required
+    def inner(*args, **kwargs):
+        if not (can("disbursement.manage") or can("cheque.manage")):
+            abort(403)
+        return fn(*args, **kwargs)
+    return inner
+
+
+def active_entries(batch):
+    return (DisbursementEntry.query.filter_by(batch_id=batch.id, removed_at=None)
+            .order_by(DisbursementEntry.id).all())
+
+
+def active_cheque(entry_id):
+    return Cheque.query.filter(Cheque.entry_id == entry_id, Cheque.status != "Cancelled").first()
+
+
+def sheet_data(batch, with_photos=False):
+    """Everything a disbursement sheet shows — used for the page, Excel and Google Sheets."""
+    rows, fee_map, purpose_map = [], {}, {}
+    for i, e in enumerate(active_entries(batch), 1):
+        ch = active_cheque(e.id)
+        amount = int(e.amount or 0)
+        fee = int(e.fee_amount or 0)
+        row = {"sno": i, "entry": e, "name": e.name, "cnic": fmt_cnic(e.cnic), "phone": e.phone or "",
+               "amount": amount, "purpose": e.purpose or "", "loan_no": e.loan_number or "",
+               "cheque_no": ch.cheque_no if ch else "", "cheque_status": ch.status if ch else "",
+               "fee": fee, "disbursed": bool(e.disbursed_at), "application_id": e.application_id}
+        if with_photos:
+            a = db.session.get(Application, e.application_id)
+            p = a.latest_photo("photo") if a else None
+            row["photo"] = read_file(p) if p else None
+        rows.append(row)
+        fee_map.setdefault(fee, {"fee": fee, "loan": amount, "count": 0, "sum": 0})
+        fee_map[fee]["count"] += 1
+        fee_map[fee]["sum"] += fee
+        purpose_map.setdefault(row["purpose"], {"name": row["purpose"], "count": 0, "sum": 0})
+        purpose_map[row["purpose"]]["count"] += 1
+        purpose_map[row["purpose"]]["sum"] += amount
+    # list every active fee slab and purpose (like the reference sheet), zeros included
+    for fc in FeeCategory.query.filter_by(active=True).order_by(FeeCategory.sort_order).all():
+        key = int(fc.fee_amount)
+        fee_map.setdefault(key, {"fee": key, "loan": int(fc.loan_amount or 0), "count": 0, "sum": 0})
+    for pc in PurposeCategory.query.filter_by(active=True).order_by(PurposeCategory.sort_order).all():
+        purpose_map.setdefault(pc.name, {"name": pc.name, "count": 0, "sum": 0})
+    order = {pc.name: pc.sort_order for pc in PurposeCategory.query.all()}
+    return {"batch": batch, "number": batch.number, "number_text": ordinal(batch.number),
+            "date_text": batch.disb_date.strftime("%A, %B %d, %Y").replace(" 0", " "),
+            "rows": rows, "count": len(rows), "total_amount": sum(r["amount"] for r in rows),
+            "total_fees": sum(r["fee"] for r in rows),
+            "disbursed_amount": sum(r["amount"] for r in rows if r["disbursed"]),
+            "fee_table": sorted(fee_map.values(), key=lambda x: -x["fee"]),
+            "purpose_table": sorted(purpose_map.values(), key=lambda x: (order.get(x["name"], 999), x["name"]))}
+
+
+def eligible_for_sheet():
+    taken = {e.application_id for e in DisbursementEntry.query.filter_by(removed_at=None)}
+    return [a for a in live(Application.query).filter(
+        Application.status.in_(["Approved", "Ready for Disbursement"])).order_by(Application.approved_at).all()
+        if a.id not in taken]
+
+
+@app.route("/disbursement", methods=["GET", "POST"])
+@requires_sheet_access
+def disbursement_list():
+    if request.method == "POST":
+        if not can("disbursement.manage"):
+            abort(403)
+        try:
+            number = int(request.form.get("number", ""))
+            when = datetime.strptime(request.form.get("disb_date", ""), "%Y-%m-%d").date()
+        except ValueError:
+            flash("Disbursement number aur date sahih likhein.")
+            return redirect(url_for("disbursement_list"))
+        if number <= 0 or DisbursementBatch.query.filter_by(number=number).first():
+            flash(f"Disbursement number {number} pehle se mojood hai ya ghalat hai.")
+            return redirect(url_for("disbursement_list"))
+        b = DisbursementBatch(number=number, disb_date=when, month=when.month, year=when.year,
+                              created_by=current_user.id, notes=request.form.get("notes", "").strip() or None)
+        db.session.add(b)
+        db.session.flush()
+        audit("disbursement.created", entity="disbursement_batch", entity_id=b.id,
+              new={"number": number, "date": when.isoformat()})
+        db.session.commit()
+        return redirect(url_for("disbursement_sheet", bid=b.id))
+    batches = DisbursementBatch.query.order_by(DisbursementBatch.disb_date.desc(), DisbursementBatch.number.desc()).all()
+    summary = {b.id: (len(active_entries(b)), sum(int(e.amount or 0) for e in active_entries(b))) for b in batches}
+    last = db.session.query(db.func.max(DisbursementBatch.number)).scalar()
+    return render_template("disbursement_list.html", batches=batches, summary=summary,
+                           next_number=(last + 1) if last else "", today=datetime.utcnow().date().isoformat(),
+                           ready=len(eligible_for_sheet()) if can("disbursement.manage") else 0)
+
+
+@app.route("/disbursement/<int:bid>")
+@requires_sheet_access
+def disbursement_sheet(bid):
+    b = db.get_or_404(DisbursementBatch, bid)
+    gy = db.session.get(GsheetYear, b.year)
+    history = {r["entry"].id: Cheque.query.filter_by(entry_id=r["entry"].id).order_by(Cheque.id).all()
+               for r in sheet_data(b)["rows"]}
+    return render_template("disbursement.html", s=sheet_data(b), b=b, history=history,
+                           eligible=eligible_for_sheet() if can("disbursement.manage") and not b.closed else [],
+                           gsheet=gy if gy and gy.status == "ready" else None, names=usernames())
+
+
+def _batch_open_or_back(b):
+    if b.closed:
+        flash(f"Disbursement sheet {b.number} close hai. Pehle Admin isay dobara khole.")
+        return redirect(url_for("disbursement_sheet", bid=b.id))
+    return None
+
+
+@app.route("/disbursement/<int:bid>/add", methods=["POST"])
+@requires("disbursement.manage")
+def disbursement_add(bid):
+    b = db.get_or_404(DisbursementBatch, bid)
+    if (r := _batch_open_or_back(b)):
+        return r
+    eligible = {a.id: a for a in eligible_for_sheet()}
+    added, problems = 0, []
+    for raw in request.form.getlist("app_id"):
+        a = eligible.get(int(raw)) if raw.isdigit() else None
+        if not a:
+            continue
+        missing = [n for n, v in (("Loan No.", a.loan_number), ("amount", a.loan_amount),
+                                  ("purpose", a.purpose_label), ("fee", a.fee_amount)) if not v and v != 0]
+        if missing:
+            problems.append(f"{a.app_id}: {', '.join(missing)} missing")
+            continue
+        vals = a.form_values
+        e = DisbursementEntry(batch_id=b.id, application_id=a.id, name=a.applicant_name, cnic=a.cnic,
+                              phone=vals.get("phone", ""), amount=a.loan_amount, purpose=a.purpose_label,
+                              loan_number=a.loan_number, fee_amount=a.fee_amount, added_by=current_user.id)
+        db.session.add(e)
+        old = a.status
+        a.status, a.updated_by, a.updated_at = "Added to Disbursement Sheet", current_user.id, datetime.utcnow()
+        db.session.flush()
+        audit("disbursement.added", a, entity="disbursement_entry", entity_id=e.id,
+              old={"status": old}, new={"status": a.status, "sheet": b.number})
+        added += 1
+    if added:
+        mark_dirty(b)
+    db.session.commit()
+    if added:
+        flash(f"{added} application(s) sheet {b.number} mein add ho gayin.")
+        try_sync()
+    if problems:
+        flash("Add nahi hui (pehle ye bharein): " + "; ".join(problems))
+    return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+def _entry(eid):
+    e = db.get_or_404(DisbursementEntry, eid)
+    if e.removed_at:
+        abort(404)
+    return e, db.session.get(DisbursementBatch, e.batch_id)
+
+
+@app.route("/disbursement/entry/<int:eid>/remove", methods=["POST"])
+@requires("disbursement.manage")
+def disbursement_remove(eid):
+    e, b = _entry(eid)
+    if (r := _batch_open_or_back(b)):
+        return r
+    reason = request.form.get("reason", "").strip()
+    if not reason:
+        flash("Sheet se nikalne ki wajah likhna zaroori hai.")
+        return redirect(url_for("disbursement_sheet", bid=b.id))
+    if e.disbursed_at:
+        flash("Raqam ada ho chuki hai; ye row nahi nikali ja sakti.")
+        return redirect(url_for("disbursement_sheet", bid=b.id))
+    for ch in Cheque.query.filter(Cheque.entry_id == e.id, Cheque.status != "Cancelled"):
+        ch.status, ch.cancel_reason = "Cancelled", "Row removed from sheet: " + reason
+        ch.cancelled_by, ch.cancelled_at = current_user.id, datetime.utcnow()
+    e.removed_at, e.removed_by, e.remove_reason = datetime.utcnow(), current_user.id, reason
+    a = db.session.get(Application, e.application_id)
+    a.status, a.updated_by, a.updated_at = "Ready for Disbursement", current_user.id, datetime.utcnow()
+    audit("disbursement.removed", a, reason=reason, entity="disbursement_entry", entity_id=e.id,
+          old={"sheet": b.number}, new={"status": a.status})
+    mark_dirty(b)
+    db.session.commit()
+    flash("Row sheet se nikal di gayi.")
+    try_sync()
+    return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+def _mark_disbursed(e, b):
+    if e.disbursed_at:
+        return False
+    e.disbursed_at, e.disbursed_by = datetime.utcnow(), current_user.id
+    a = db.session.get(Application, e.application_id)
+    old = a.status
+    a.status, a.updated_by, a.updated_at = "Disbursed", current_user.id, datetime.utcnow()
+    audit("disbursement.disbursed", a, entity="disbursement_entry", entity_id=e.id,
+          old={"status": old}, new={"status": "Disbursed", "sheet": b.number})
+    return True
+
+
+@app.route("/disbursement/entry/<int:eid>/disbursed", methods=["POST"])
+@requires("disbursement.manage")
+def disbursement_mark(eid):
+    e, b = _entry(eid)
+    if (r := _batch_open_or_back(b)):
+        return r
+    if _mark_disbursed(e, b):
+        mark_dirty(b)
+        db.session.commit()
+        try_sync()
+    return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+@app.route("/disbursement/<int:bid>/disburse-all", methods=["POST"])
+@requires("disbursement.manage")
+def disbursement_mark_all(bid):
+    b = db.get_or_404(DisbursementBatch, bid)
+    if (r := _batch_open_or_back(b)):
+        return r
+    n = sum(_mark_disbursed(e, b) for e in active_entries(b))
+    if n:
+        mark_dirty(b)
+        db.session.commit()
+        flash(f"{n} row(s) disbursed mark ho gayin.")
+        try_sync()
+    return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+@app.route("/disbursement/entry/<int:eid>/cheque", methods=["POST"])
+@requires_sheet_access
+def save_cheque(eid):
+    e, b = _entry(eid)
+    if (r := _batch_open_or_back(b)):
+        return r
+    back = redirect(url_for("disbursement_sheet", bid=b.id) + f"#e{e.id}")
+    number = request.form.get("cheque_no", "").strip()[:40]
+    status = request.form.get("status", "Issued")
+    reason = request.form.get("reason", "").strip()
+    if status not in ("Pending", "Issued", "Cleared", "Cancelled"):
+        abort(400)
+    cur = active_cheque(e.id)
+    a = db.session.get(Application, e.application_id)
+    now = datetime.utcnow()
+    if status == "Cancelled":
+        if not cur:
+            return back
+        if not reason:
+            flash("Cheque cancel karne ki wajah likhna zaroori hai.")
+            return back
+        cur.status, cur.cancel_reason, cur.cancelled_by, cur.cancelled_at = "Cancelled", reason, current_user.id, now
+        audit("cheque.cancelled", a, reason=reason, entity="cheque", entity_id=cur.id,
+              old={"cheque_no": cur.cheque_no}, new={"status": "Cancelled"})
+    elif not number:
+        flash("Cheque number likhein.")
+        return back
+    elif cur and cur.cheque_no == number:
+        if cur.status != status:
+            old = cur.status
+            cur.status, cur.updated_by, cur.updated_at = status, current_user.id, now
+            audit("cheque.status", a, entity="cheque", entity_id=cur.id, old={"status": old},
+                  new={"status": status, "cheque_no": number})
+    else:
+        clash = Cheque.query.filter(Cheque.cheque_no == number, Cheque.status != "Cancelled").first()
+        if clash:
+            flash(f"Cheque number {number} pehle se kisi aur row par active hai.")
+            return back
+        if cur:
+            if not reason:
+                flash("Purana cheque badalne ki wajah likhna zaroori hai (purana cheque cancel hoga).")
+                return back
+            cur.status, cur.cancel_reason, cur.cancelled_by, cur.cancelled_at = "Cancelled", reason, current_user.id, now
+            audit("cheque.cancelled", a, reason=reason, entity="cheque", entity_id=cur.id,
+                  old={"cheque_no": cur.cheque_no}, new={"status": "Cancelled", "replaced_by": number})
+            db.session.flush()
+        ch = Cheque(entry_id=e.id, cheque_no=number, status=status, created_by=current_user.id)
+        db.session.add(ch)
+        db.session.flush()
+        audit("cheque.saved", a, entity="cheque", entity_id=ch.id, new={"cheque_no": number, "status": status,
+                                                                       "sheet": b.number})
+    mark_dirty(b)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash(f"Cheque number {number} pehle se active hai.")
+        return back
+    try_sync()
+    return back
+
+
+@app.route("/disbursement/<int:bid>/close", methods=["POST"])
+@requires("period.close")
+def disbursement_close(bid):
+    b = db.get_or_404(DisbursementBatch, bid)
+    if not b.closed:
+        b.status, b.closed_by, b.closed_at = "closed", current_user.id, datetime.utcnow()
+        audit("disbursement.closed", entity="disbursement_batch", entity_id=b.id, new={"number": b.number})
+        db.session.commit()
+        flash(f"Sheet {b.number} close ho gayi. Ab is mein tabdeeli nahi ho sakti.")
+    return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+@app.route("/disbursement/<int:bid>/reopen", methods=["POST"])
+@requires("period.close")
+def disbursement_reopen(bid):
+    b = db.get_or_404(DisbursementBatch, bid)
+    reason = request.form.get("reason", "").strip()
+    if b.closed:
+        if not reason:
+            flash("Dobara kholne ki wajah likhna zaroori hai.")
+            return redirect(url_for("disbursement_sheet", bid=b.id))
+        b.status, b.reopened_by, b.reopened_at, b.reopen_reason = "open", current_user.id, datetime.utcnow(), reason
+        audit("disbursement.reopened", entity="disbursement_batch", entity_id=b.id, reason=reason,
+              new={"number": b.number})
+        db.session.commit()
+        flash(f"Sheet {b.number} dobara khul gayi.")
+    return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+@app.route("/disbursement/entry/<int:eid>/photo")
+@requires_sheet_access
+def disbursement_photo(eid):
+    e = db.get_or_404(DisbursementEntry, eid)
+    a = db.session.get(Application, e.application_id)
+    p = a.latest_photo("photo") if a else None
+    if not p:
+        return redirect(url_for("static", filename="no-photo.svg"))
+    resp = send_file(io.BytesIO(read_file(p)), mimetype=p.content_type)
+    resp.headers["Cache-Control"] = "private, no-store"
+    return resp
+
+
+@app.route("/disbursement/<int:bid>/xlsx")
+@requires_sheet_access
+def disbursement_xlsx(bid):
+    from sheet_export import build_xlsx
+    b = db.get_or_404(DisbursementBatch, bid)
+    with open(os.path.join(app.static_folder, "tooba-logo.png"), "rb") as fh:
+        logo = fh.read()
+    data = build_xlsx(sheet_data(b, with_photos=True), logo)
+    return send_file(io.BytesIO(data), as_attachment=True, download_name=f"Disbursement_{b.number}.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ---------------------------------------------------------------- Google Sheets sync
+GOOGLE_CLIENT = None          # tests put a fake client here
+
+
+def google_client():
+    return GOOGLE_CLIENT or gsheets.GoogleClient()
+
+
+def mark_dirty(batch):
+    for m in (batch.month, 0):
+        row = db.session.get(GsheetSync, (batch.year, m))
+        if row is None:
+            db.session.add(GsheetSync(year=batch.year, month=m, dirty=True))
+        else:
+            row.dirty, row.requested_at = True, datetime.utcnow()
+
+
+def app_link(app_pk):
+    base = os.getenv("APP_BASE_URL") or (request.url_root if has_request_context() else "")
+    return base.rstrip("/") + f"/application/{app_pk}" if base else ""
+
+
+def month_rows(year, month):
+    rows, bold = [], []
+    batches = (DisbursementBatch.query.filter_by(year=year, month=month)
+               .order_by(DisbursementBatch.disb_date, DisbursementBatch.number).all())
+    total_n = total_amt = total_fee = 0
+    for b in batches:
+        s = sheet_data(b)
+        bold += [len(rows), len(rows) + 1, len(rows) + 2]
+        rows.append(["TOOBA FOUNDATION", "", "", "", "", "", "", "", "", "", "",
+                     "Closed" if b.closed else "Open"])
+        rows.append([f"Disbursement Number {s['number_text']}", "", "", s["date_text"]])
+        rows.append(["S.No", "Name", "CNIC No.", "Cell No.", "Amount", "Purpose", "Loan No.", "Cheque No.",
+                     "Photo", "Signature", "Thumb", "Form Fees"])
+        for r in s["rows"]:
+            rows.append([r["sno"], r["name"], r["cnic"], r["phone"], r["amount"], r["purpose"], r["loan_no"],
+                         r["cheque_no"], app_link(r["application_id"]), "", "", r["fee"]])
+        bold.append(len(rows))
+        rows.append(["", "Total Amount", "", "", s["total_amount"], "", f"Applicants: {s['count']}", "", "",
+                     "", "", s["total_fees"]])
+        rows.append([])
+        total_n, total_amt, total_fee = total_n + s["count"], total_amt + s["total_amount"], total_fee + s["total_fees"]
+    if batches:
+        bold.append(len(rows))
+        rows.append(["", "Month total", "", "", total_amt, "", f"Applicants: {total_n}", "", "", "", "", total_fee])
+    return rows, bold
+
+
+def summary_rows(year):
+    rows = [["Tooba Foundation – Yearly Summary", str(year)], [],
+            ["Month", "Sheets", "Applicants", "Total Amount", "Disbursed Amount", "Form Fees"]]
+    bold = [0, 2]
+    tot = [0, 0, 0, 0, 0]
+    purpose, fees = {}, {}
+    for m in range(1, 13):
+        bs = DisbursementBatch.query.filter_by(year=year, month=m).all()
+        vals = [len(bs), 0, 0, 0, 0]
+        for b in bs:
+            s = sheet_data(b)
+            vals[1] += s["count"]
+            vals[2] += s["total_amount"]
+            vals[3] += s["disbursed_amount"]
+            vals[4] += s["total_fees"]
+            for r in s["rows"]:
+                purpose.setdefault(r["purpose"], [0, 0])
+                purpose[r["purpose"]][0] += 1
+                purpose[r["purpose"]][1] += r["amount"]
+                fees.setdefault(r["fee"], [0, 0])
+                fees[r["fee"]][0] += 1
+                fees[r["fee"]][1] += r["fee"]
+        rows.append([gsheets.MONTHS[m - 1]] + vals)
+        tot = [x + y for x, y in zip(tot, vals)]
+    bold.append(len(rows))
+    rows.append(["Total"] + tot)
+    rows += [[], ["Purpose", "Number of Loans", "Loan Amount"]]
+    bold.append(len(rows) - 1)
+    rows += [[k, v[0], v[1]] for k, v in sorted(purpose.items())]
+    rows += [[], ["Form Fee", "Fee Collection", "Fee Amount"]]
+    bold.append(len(rows) - 1)
+    rows += [[k, v[0], v[1]] for k, v in sorted(fees.items(), reverse=True)]
+    return rows, bold
+
+
+def ensure_year(year, client):
+    """One spreadsheet per year — never a duplicate. Returns the GsheetYear row or None."""
+    gy = db.session.get(GsheetYear, year)
+    if gy and gy.status == "ready":
+        return gy
+    if gy is None:
+        gy = GsheetYear(year=year, status="creating")
+        db.session.add(gy)
+        try:
+            db.session.commit()            # the row is the lock: a second request sees it
+        except IntegrityError:
+            db.session.rollback()
+            return None
+    elif gy.status == "creating" and gy.created_at and gy.created_at > datetime.utcnow() - timedelta(minutes=5) \
+            and not getattr(g, "_creating_year", False):
+        return None                        # another request is creating it right now
+    g._creating_year = True
+    try:
+        found = client.find_year(year)
+        sid, url, tabs = found if found else client.create_year(year)
+    except Exception:
+        db.session.rollback()
+        row = db.session.get(GsheetYear, year)
+        if row is not None and row.status != "ready":
+            row.status = "failed"          # next attempt tries again (and still checks for an existing file)
+            db.session.commit()
+        raise
+    gy.spreadsheet_id, gy.url, gy.tab_ids, gy.status = sid, url, tabs, "ready"
+    if not found:
+        audit("gsheets.year_created", new={"year": year, "url": url})
+    db.session.add(GsheetSyncLog(year=year, month=None, ok=True,
+                                 message=("Found existing " if found else "Created ") + gsheets.title_for(year)))
+    db.session.commit()
+    return gy
+
+
+def run_sync(limit=4):
+    """Write dirty month tabs (and the yearly summary) to Google. Failures are logged and retried."""
+    if not (gsheets.configured() or GOOGLE_CLIENT):
+        return 0
+    client = google_client()
+    done = 0
+    for row in GsheetSync.query.filter_by(dirty=True).order_by(GsheetSync.month.desc()).limit(limit).all():
+        key = (row.year, row.month)
+        try:
+            gy = ensure_year(row.year, client)
+            if gy is None:
+                continue
+            tab = gsheets.SUMMARY if row.month == 0 else gsheets.MONTHS[row.month - 1]
+            values, bold = summary_rows(row.year) if row.month == 0 else month_rows(row.year, row.month)
+            client.write_tab(gy.spreadsheet_id, tab, (gy.tab_ids or {}).get(tab), values, bold)
+            row = db.session.get(GsheetSync, key)
+            row.dirty, row.synced_at, row.last_error = False, datetime.utcnow(), None
+            db.session.add(GsheetSyncLog(year=key[0], month=key[1], ok=True, message=f"Synced {tab}"))
+            db.session.commit()
+            done += 1
+        except Exception as exc:              # Google failing must never break the website
+            db.session.rollback()
+            row = db.session.get(GsheetSync, key)
+            if row is not None:
+                row.attempts, row.last_error = (row.attempts or 0) + 1, str(exc)[:500]
+            db.session.add(GsheetSyncLog(year=key[0], month=key[1], ok=False, message=str(exc)[:500]))
+            db.session.commit()
+    return done
+
+
+def try_sync():
+    try:
+        run_sync(limit=2)
+    except Exception:
+        db.session.rollback()
+
+
+@app.route("/admin/google-sheets", methods=["GET", "POST"])
+@requires("gsheets.manage")
+def google_sheets():
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "year":
+            y = request.form.get("year", type=int)
+            if y and not db.session.get(GsheetSync, (y, 0)):
+                db.session.add(GsheetSync(year=y, month=0, dirty=True))
+                db.session.commit()
+        elif action == "resync":
+            for b in DisbursementBatch.query.all():
+                mark_dirty(b)
+            db.session.commit()
+        n = run_sync(limit=30) if (gsheets.configured() or GOOGLE_CLIENT) else 0
+        flash(f"{n} tab(s) sync hue." if gsheets.configured() or GOOGLE_CLIENT
+              else "Google Sheets abhi configure nahi — neeche di gayi settings Vercel mein lagayein.")
+        return redirect(url_for("google_sheets"))
+    return render_template("google_sheets.html", configured=gsheets.configured() or bool(GOOGLE_CLIENT),
+                           mode=gsheets.mode(), years=GsheetYear.query.order_by(GsheetYear.year.desc()).all(),
+                           pending=GsheetSync.query.filter_by(dirty=True).all(),
+                           log=GsheetSyncLog.query.order_by(GsheetSyncLog.id.desc()).limit(40).all(),
+                           this_year=(datetime.utcnow() + timedelta(hours=5)).year)
+
+
+@app.route("/cron/gsheets")
+@csrf.exempt
+def cron_gsheets():
+    """Called by Vercel Cron. Retries failed syncs and creates the new year's spreadsheet in time."""
+    secret = os.getenv("CRON_SECRET")
+    if not secret or request.headers.get("Authorization") != f"Bearer {secret}":
+        abort(401)
+    g._db_actor = ("", "system")
+    if not USING_SQLITE and db.session().in_transaction():
+        db.session.execute(_SET_ACTOR, {"u": "", "r": "system"})
+    year = (datetime.utcnow() + timedelta(hours=5)).year
+    if not db.session.get(GsheetSync, (year, 0)) and (gsheets.configured() or GOOGLE_CLIENT):
+        db.session.add(GsheetSync(year=year, month=0, dirty=True))
+        db.session.commit()
+    return jsonify(synced=run_sync(limit=20))
+
+
+# ---------------------------------------------------------------- reports
+def report_data(year):
+    apps = live(Application.query).all()
+    names = usernames()
+    entries = (db.session.query(DisbursementEntry, DisbursementBatch)
+               .join(DisbursementBatch, DisbursementBatch.id == DisbursementEntry.batch_id)
+               .filter(DisbursementEntry.removed_at.is_(None)).all())
+    rejected_at = {}
+    for h in AuditLog.query.filter_by(action="application.status").all():
+        if (h.new_value or {}).get("status") == "Rejected":
+            rejected_at[h.application_id] = h.created_at
+    amt = lambda a: int(a.loan_amount or 0)
+    monthly = []
+    for m in range(1, 13):
+        inm = lambda d: d is not None and d.year == year and d.month == m
+        ents = [e for e, b in entries if b.year == year and b.month == m]
+        monthly.append({
+            "month": gsheets.MONTHS[m - 1],
+            "created": sum(1 for a in apps if inm(a.created_at)),
+            "approved": sum(1 for a in apps if inm(a.approved_at)),
+            "approved_amount": sum(amt(a) for a in apps if inm(a.approved_at)),
+            "rejected": sum(1 for a in apps if inm(rejected_at.get(a.id))),
+            "sheet_count": len(ents),
+            "disbursed": sum(1 for e in ents if e.disbursed_at),
+            "disbursed_amount": sum(int(e.amount or 0) for e in ents if e.disbursed_at),
+            "fees": sum(int(e.fee_amount or 0) for e in ents)})
+    years = sorted({a.created_at.year for a in apps if a.created_at} | {b.year for _, b in entries} | {year})
+    yearly = []
+    for y in years:
+        ents = [e for e, b in entries if b.year == y]
+        yearly.append({"year": y, "created": sum(1 for a in apps if a.created_at and a.created_at.year == y),
+                       "approved": sum(1 for a in apps if a.approved_at and a.approved_at.year == y),
+                       "disbursed_amount": sum(int(e.amount or 0) for e in ents if e.disbursed_at),
+                       "fees": sum(int(e.fee_amount or 0) for e in ents)})
+    yr = [a for a in apps if a.created_at and a.created_at.year == year]
+    pending_set = {"Submitted", "Pending Review", "In Review", "Correction Required", "Submitted Again"}
+    done_set = {"Approved", "Ready for Disbursement", "Added to Disbursement Sheet", "Disbursed", "Completed"}
+    staff = {}
+    for a in yr:
+        k = names.get(a.created_by, "?")
+        r = staff.setdefault(k, {"name": k, "total": 0, "draft": 0, "pending": 0, "approved": 0, "rejected": 0})
+        r["total"] += 1
+        if a.status == "Draft":
+            r["draft"] += 1
+        elif a.status in pending_set:
+            r["pending"] += 1
+        elif a.status in done_set:
+            r["approved"] += 1
+        elif a.status == "Rejected":
+            r["rejected"] += 1
+    reviewers = {}
+    for a in yr:
+        if not a.reviewer_id:
+            continue
+        k = names.get(a.reviewer_id, "?")
+        r = reviewers.setdefault(k, {"name": k, "assigned": 0, "pending": 0, "approved": 0, "rejected": 0})
+        r["assigned"] += 1
+        if a.status in pending_set:
+            r["pending"] += 1
+        elif a.status in done_set:
+            r["approved"] += 1
+        elif a.status == "Rejected":
+            r["rejected"] += 1
+    purpose = {}
+    for a in yr:
+        k = a.purpose_label or "—"
+        r = purpose.setdefault(k, {"name": k, "count": 0, "amount": 0, "disbursed": 0})
+        r["count"] += 1
+        r["amount"] += amt(a)
+    for e, b in entries:
+        if b.year == year and e.disbursed_at:
+            purpose.setdefault(e.purpose or "—", {"name": e.purpose or "—", "count": 0, "amount": 0, "disbursed": 0})
+            purpose[e.purpose or "—"]["disbursed"] += int(e.amount or 0)
+    fees = {}
+    for e, b in entries:
+        if b.year == year:
+            k = int(e.fee_amount or 0)
+            r = fees.setdefault(k, {"fee": k, "count": 0, "sum": 0})
+            r["count"] += 1
+            r["sum"] += k
+    totals = {"approved": sum(1 for a in yr if a.status in done_set),
+              "approved_amount": sum(amt(a) for a in yr if a.status in done_set),
+              "rejected": sum(1 for a in yr if a.status == "Rejected"),
+              "pending": sum(1 for a in yr if a.status in pending_set),
+              "drafts": sum(1 for a in yr if a.status == "Draft"),
+              "disbursed": sum(1 for e, b in entries if b.year == year and e.disbursed_at),
+              "disbursed_amount": sum(int(e.amount or 0) for e, b in entries if b.year == year and e.disbursed_at),
+              "fees": sum(int(e.fee_amount or 0) for e, b in entries if b.year == year)}
+    return {"year": year, "years": years, "monthly": monthly, "yearly": yearly,
+            "staff": sorted(staff.values(), key=lambda r: -r["total"]),
+            "reviewers": sorted(reviewers.values(), key=lambda r: -r["assigned"]),
+            "purpose": sorted(purpose.values(), key=lambda r: -r["count"]),
+            "fees": sorted(fees.values(), key=lambda r: -r["fee"]), "totals": totals}
+
+
+REPORT_COLUMNS = {
+    "monthly": [("month", "Month"), ("created", "Applications"), ("approved", "Approved"),
+                ("approved_amount", "Approved amount"), ("rejected", "Rejected"), ("sheet_count", "On sheets"),
+                ("disbursed", "Disbursed"), ("disbursed_amount", "Disbursed amount"), ("fees", "Form fees")],
+    "yearly": [("year", "Year"), ("created", "Applications"), ("approved", "Approved"),
+               ("disbursed_amount", "Disbursed amount"), ("fees", "Form fees")],
+    "staff": [("name", "Staff"), ("total", "Total"), ("draft", "Draft"), ("pending", "In review"),
+              ("approved", "Approved+"), ("rejected", "Rejected")],
+    "reviewers": [("name", "Reviewer"), ("assigned", "Assigned"), ("pending", "Pending"),
+                  ("approved", "Approved+"), ("rejected", "Rejected")],
+    "purpose": [("name", "Purpose"), ("count", "Applications"), ("amount", "Requested amount"),
+                ("disbursed", "Disbursed amount")],
+    "fees": [("fee", "Form fee"), ("count", "Fee collection"), ("sum", "Fee amount")],
+}
 
 
 # ---------------------------------------------------------------- errors / headers

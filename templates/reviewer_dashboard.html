@@ -1,0 +1,27 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% from "_app_table.html" import app_table %}{% block title %}Reviewer Dashboard{% endblock %}
+{% block content %}
+<section class="hero rise">
+  <div class="hero-in">
+    <div class="urdu" lang="ur" dir="rtl">السلام علیکم</div>
+    <h1>Reviewer Desk — {{ current_user.display }}</h1>
+    <p>Aapko {{ stats.assigned }} applications assigned hain; {{ stats.waiting }} review ke intezar mein.</p>
+  </div>
+  <a class="btn hero-in" href="{{ url_for('reviewer_applications') }}">{{ icon('files') }} Assigned applications</a>
+</section>
+<div class="kpis">
+  <div class="kpi rise" style="--i:1"><small>Assigned</small><b>{{ stats.assigned }}</b></div>
+  <div class="kpi rise" style="--i:2"><small>Review ke intezar mein</small><b>{{ stats.waiting }}</b></div>
+  <div class="kpi rise" style="--i:3"><small>In Review</small><b>{{ stats.in_review }}</b></div>
+  <div class="kpi rise" style="--i:4"><small>Correction bheji</small><b>{{ stats.correction }}</b></div>
+  <div class="kpi rise" style="--i:5"><small>Maine approve ki</small><b>{{ stats.approved }}</b></div>
+  <div class="kpi rise" style="--i:6"><small>Rejected</small><b>{{ stats.rejected }}</b></div>
+</div>
+<div class="card pad-0 rise" style="--i:3">
+  <div class="card-head" style="padding:16px 20px 0"><h2>{{ icon('clock') }} Review shuru karni hai</h2></div>
+  {{ app_table(waiting, names, 'Koi application intezar mein nahi', 'Nayi assigned application yahan nazar aayegi.') }}
+</div>
+<div class="card pad-0 rise" style="--i:4">
+  <div class="card-head" style="padding:16px 20px 0"><h2>{{ icon('eye') }} In Review</h2></div>
+  {{ app_table(in_review, names, 'Abhi koi application review mein nahi') }}
+</div>
+{% endblock %}

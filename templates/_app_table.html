@@ -1,0 +1,26 @@
+{% from "_icons.html" import icon %}
+{% macro app_table(apps, names, empty_title='Koi application nahi', empty_text='') %}
+{% if apps %}
+<div class="overflow"><table>
+  <thead><tr><th>Applicant</th><th>ID</th><th class="hide-sm">Loan No.</th><th class="hide-sm">CNIC</th><th>Status</th><th class="hide-sm">Last update</th><th style="text-align:right">Actions</th></tr></thead>
+  <tbody>
+  {% for a in apps %}
+  <tr>
+    <td><a class="who" href="{{ url_for('view_application', app_id=a.id) }}"><span class="av">{{ (a.applicant_name or '?')[:1]|upper }}</span><span><b>{{ a.applicant_name or 'New applicant' }}</b><small>{{ (a.data.get('business') or a.data.get('phone') or '—') }}</small></span></a></td>
+    <td><span class="appid">{{ a.app_id }}</span></td>
+    <td class="hide-sm mono">{{ a.loan_number or '—' }}</td>
+    <td class="hide-sm mono">{{ a.cnic or '—' }}</td>
+    <td><span class="badge {{ a.status|slug }}">{{ a.status }}</span></td>
+    <td class="hide-sm muted">{{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }}{% if a.updated_by %}<br>by {{ names.get(a.updated_by, '?') }}{% endif %}</td>
+    <td><div class="acts">
+      <a class="act" href="{{ url_for('view_application', app_id=a.id) }}" title="Open">{{ icon('eye') }}</a>
+      <a class="act" href="{{ url_for('print_application', app_id=a.id) }}" target="_blank" title="Print">{{ icon('print') }}</a>
+    </div></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+{% else %}
+<div class="empty"><div class="bubble">{{ icon('files') }}</div><b>{{ empty_title }}</b>{{ empty_text }}</div>
+{% endif %}
+{% endmacro %}

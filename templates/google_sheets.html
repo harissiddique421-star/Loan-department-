@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Google Sheets{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Google Sheets</h1>
+  <p>Supabase asal record hai; Google Sheet uski copy hai. Har saal ki ek master spreadsheet (January–December + Yearly Summary). Google mein masla ho to website chalti rehti hai aur sync baad mein dobara hoti hai.</p></div></div>
+{% if not configured %}
+<section class="card rise warnbox" style="--i:1">
+  <b>Abhi configure nahi.</b> Vercel → Settings → Environment Variables mein ye lagayein, phir redeploy:
+  <ul>
+    <li><b>Google Workspace (Shared Drive):</b> <code>GOOGLE_SERVICE_ACCOUNT_JSON</code> (service account key) aur <code>GOOGLE_DRIVE_FOLDER_ID</code> (Shared Drive folder jismein service account ko Editor banaya ho).</li>
+    <li><b>Ya aam Gmail:</b> <code>GOOGLE_OAUTH_CLIENT_ID</code>, <code>GOOGLE_OAUTH_CLIENT_SECRET</code>, <code>GOOGLE_OAUTH_REFRESH_TOKEN</code> (optional <code>GOOGLE_DRIVE_FOLDER_ID</code>).</li>
+    <li><code>APP_BASE_URL</code> = https://tooba-foundation.vercel.app (sheet mein photo link ke liye) aur <code>CRON_SECRET</code> (roz ki automatic retry ke liye).</li>
+  </ul>
+</section>
+{% else %}
+<p class="muted">Connected via {{ mode or 'test client' }}.</p>
+{% endif %}
+<div class="two">
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('files') }} Yearly master spreadsheets</h2></div>
+  <ul class="mini">{% for y in years %}
+    <li><span><b>{{ y.year }}</b><span class="sub">{{ y.status }}</span></span>{% if y.url %}<a class="btn small light" href="{{ y.url }}" target="_blank" rel="noopener">Open</a>{% endif %}</li>
+  {% else %}<li class="muted">Abhi koi spreadsheet nahi.</li>{% endfor %}</ul>
+  <form method="post" class="settings-row" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="year"><input class="num" name="year" value="{{ this_year }}" inputmode="numeric" aria-label="Year">
+    <button class="btn small">{{ icon('plus') }} Is saal ki sheet banayein / sync</button></form>
+</section>
+<section class="card rise" style="--i:3">
+  <div class="card-head"><h2>{{ icon('refresh') }} Sync</h2><span class="muted">{{ pending|length }} pending</span></div>
+  <ul class="mini">{% for p in pending %}<li><span>{{ p.year }} · {{ 'Yearly Summary' if p.month == 0 else p.month }}<span class="sub">{{ p.attempts }} koshish{% if p.last_error %} · {{ p.last_error[:140] }}{% endif %}</span></span></li>{% else %}<li class="muted">Sab sync hai.</li>{% endfor %}</ul>
+  <form method="post" class="row" style="margin-top:12px"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn small" name="action" value="sync">{{ icon('refresh') }} Abhi sync karein</button>
+    <button class="btn small light" name="action" value="resync">Sab sheets dobara likhein</button></form>
+</section>
+</div>
+<div class="card pad-0 rise" style="--i:4"><div class="overflow"><table>
+  <thead><tr><th>Waqt</th><th>Saal / mahina</th><th>Nateeja</th></tr></thead>
+  <tbody>{% for l in log %}<tr><td class="muted">{{ l.created_at.strftime('%d %b %Y, %H:%M') }}</td><td>{{ l.year or '' }} {{ ('· Summary' if l.month == 0 else '· ' ~ l.month) if l.month is not none }}</td><td>{% if l.ok %}<span class="state-on">OK</span>{% else %}<span class="state-off">Failed</span>{% endif %} {{ l.message }}</td></tr>
+  {% else %}<tr><td colspan="3" class="muted">Abhi koi sync log nahi.</td></tr>{% endfor %}</tbody>
+</table></div></div>
+{% endblock %}

@@ -329,3 +329,71 @@ details.card[open] > *:not(summary) { animation: rise .4s var(--ease) both }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important }
 }
+
+/* ---------- section shell: one sidebar per role ---------- */
+.shell { --accent: var(--green); --accent-50: var(--green-50); display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh }
+.shell[data-portal="admin"] { --accent: var(--navy); --accent-50: var(--navy-50) }
+.shell[data-portal="reviewer"] { --accent: var(--violet); --accent-50: var(--violet-50) }
+.side { position: sticky; top: 0; height: 100vh; overflow-y: auto; background: #fff; border-right: 1px solid var(--line); padding: 18px 14px; display: flex; flex-direction: column; gap: 14px; border-top: 4px solid var(--accent) }
+.side .brand { padding: 0 6px }
+.portal-pill { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 13px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); background: var(--accent-50); border-radius: 12px; padding: 9px 12px }
+.side-nav { display: grid; gap: 3px }
+.side-nav a, .side-new { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; color: var(--ink-2); font: 600 14px/1.2 var(--f-ui); transition: background .2s, color .2s; border: 0; background: none; width: 100%; text-align: left; cursor: pointer }
+.side-nav a:hover, .side-new:hover { background: var(--green-50); color: var(--green-700) }
+.side-nav a.on { background: var(--green); color: #fff }
+.side-new { margin-top: 6px; background: var(--green-50); color: var(--green-700); font-weight: 700 }
+.side-foot { margin-top: auto; display: flex; align-items: center; gap: 8px }
+.side-foot .chip { flex: 1; min-width: 0 }
+.side-foot .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.shell-main { min-width: 0 }
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr }
+  .side { position: sticky; z-index: 30; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 14px; gap: 8px; border-right: 0; border-bottom: 1px solid var(--line) }
+  .side .brand span, .side-foot .nm { display: none }
+  .portal-pill { padding: 6px 10px; font-size: 11px }
+  .side-nav { order: 3; width: 100%; display: flex; overflow-x: auto; gap: 4px }
+  .side-nav a, .side-new { width: auto; white-space: nowrap; padding: 8px 12px; margin: 0 }
+  .side-nav form { flex: none }
+  .side-foot { margin-left: auto }
+}
+@media print { .side { display: none !important } .shell { display: block } }
+
+/* ---------- section login ---------- */
+.portal-cards { display: grid; gap: 14px; width: min(100%, 460px) }
+.portal-card { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; gap: 14px; align-items: center; background: #fff; border: 1px solid var(--line); border-left: 5px solid var(--accent, var(--green)); border-radius: 18px; padding: 18px; color: var(--ink); box-shadow: var(--shadow-sm); transition: transform .2s var(--ease), box-shadow .2s }
+.portal-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); color: var(--ink) }
+.portal-card .ico { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-50, var(--green-50)); color: var(--accent, var(--green)) }
+.portal-card b { display: block; font-size: 17px }
+.portal-card small { color: var(--muted) }
+.portal-card .ic-go { color: var(--accent, var(--green)) }
+.portal-admin { --accent: var(--navy); --accent-50: var(--navy-50) }
+.portal-reviewer { --accent: var(--violet); --accent-50: var(--violet-50) }
+.portal-staff { --accent: var(--green); --accent-50: var(--green-50) }
+.auth-card.portal-admin, .auth-card.portal-reviewer, .auth-card.portal-staff { border-top: 5px solid var(--accent) }
+.auth-card .section-tag { display: block; width: fit-content; margin: 0 auto 10px; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); background: var(--accent-50); border-radius: 999px; padding: 5px 12px }
+.auth-card .switch { display: block; text-align: center; margin-top: 14px; font-size: 13px }
+
+/* ---------- dashboards ---------- */
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px }
+.kpi { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow-sm); color: var(--ink) }
+a.kpi:hover { border-color: var(--green-100); color: var(--ink) }
+.kpi small { display: block; color: var(--muted); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .05em }
+.kpi b { font-size: 28px; font-weight: 800; font-variant-numeric: tabular-nums }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px }
+@media (max-width: 960px) { .two { grid-template-columns: 1fr } }
+.mini { list-style: none; margin: 0; padding: 0 }
+.mini li { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line-2) }
+.mini li:last-child { border-bottom: 0 }
+.mini .sub { color: var(--muted); font-size: 12.5px; display: block }
+.json { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--ink-2); white-space: pre-wrap; word-break: break-word; max-width: 420px }
+.settings-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.settings-row input[type=text], .settings-row input:not([type]) { width: 170px; padding: 7px 10px; font-size: 14px }
+.settings-row input.num { width: 110px }
+.cnic-grid { display: grid; gap: 12px }
+.cnic-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px }
+.cnic-row > b { grid-column: 1 / -1; font-size: 14px }
+.cnic-slot { border: 1.5px dashed #a9c7b2; border-radius: 12px; padding: 8px; display: grid; gap: 6px; justify-items: center; background: #f7fbf8; min-height: 120px; align-content: start }
+.cnic-slot.has { border-style: solid; border-color: var(--green); background: #fff }
+.cnic-slot img { max-height: 90px; max-width: 100%; object-fit: contain; border-radius: 6px }
+.cnic-side { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em }
+.pick-file { cursor: pointer }
