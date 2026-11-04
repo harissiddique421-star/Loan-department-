@@ -15,8 +15,12 @@
       {% if b.closed %}
       <form method="post" action="{{ url_for('disbursement_reopen', bid=b.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Kholne ki wajah" required maxlength="500" aria-label="Reopen reason"><button class="btn small light">Reopen</button></form>
       {% else %}
-      {% if current_user.role == 'Admin' and not s.disbursed_amount %}
+      {% if current_user.role == 'Admin' %}
+      {% if s.rows|selectattr('disbursed')|list %}
+      <button class="btn small danger" disabled title="Is sheet mein Paid rows hain">{{ icon('trash') }} Delete sheet</button>
+      {% else %}
       <form method="post" action="{{ url_for('disbursement_delete', bid=b.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Delete ki wajah" required maxlength="500" aria-label="Delete reason"><button class="btn small danger" data-confirm="Sheet {{ b.number }} delete karein? Is ki saari applications dobara 'Ready for Disbursement' ho jayengi aur cheques cancel ho jayenge. Record audit log mein rahe ga.">{{ icon('trash') }} Delete sheet</button></form>
+      {% endif %}
       {% endif %}
       <form method="post" action="{{ url_for('disbursement_close', bid=b.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small navy" data-confirm="Sheet close karne ke baad is mein koi tabdeeli nahi ho sakti (Admin wajah likh kar dobara khol sakta hai). Close karein?">{{ icon('check') }} Close sheet</button></form>
       {% endif %}
@@ -24,6 +28,9 @@
   </div>
 </div>
 
+{% if current_user.role == 'Admin' and not b.closed and s.rows|selectattr('disbursed')|list %}
+<div class="card no-print" style="margin-bottom:12px;border-left:4px solid #c4372f;padding:12px 14px">Ye sheet delete nahi ho sakti kyunke is mein <b>Paid</b> rows hain. Agar Paid ghalti se laga tha to us row par <b>↺ Undo Paid</b> (wajah likh kar) dabayein, phir <b>Delete sheet</b> ka button chalega.</div>
+{% endif %}
 <div class="dsheet">
   <div class="ds-banner">
     <div class="ds-title"><div class="t1">THE TOOBA FOUNDATION</div><div class="t2">&amp; Community Center</div><div class="t3" lang="ur" dir="rtl">سود سے پاک چھوٹے قرضوں کا فلاحی ادارہ</div></div>
@@ -57,7 +64,8 @@
       <td>{{ money(r.fee) }}
         {% if manage %}<div class="no-print ds-ops">
           {% if not r.disbursed %}<form method="post" action="{{ url_for('disbursement_mark', eid=r.entry.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small light" title="Raqam ada ho gayi">✓ Paid</button></form>
-          <form method="post" action="{{ url_for('disbursement_remove', eid=r.entry.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Nikalne ki wajah" required maxlength="300" aria-label="Remove reason"><button class="btn small danger">Remove</button></form>{% endif %}
+          <form method="post" action="{{ url_for('disbursement_remove', eid=r.entry.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Nikalne ki wajah" required maxlength="300" aria-label="Remove reason"><button class="btn small danger">Remove</button></form>
+          {% elif current_user.role == 'Admin' %}<form method="post" action="{{ url_for('disbursement_unmark', eid=r.entry.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Paid hatane ki wajah" required maxlength="300" aria-label="Undo paid reason"><button class="btn small light" data-confirm="Is row se Paid mark hatayein? Record audit log mein rahe ga.">↺ Undo Paid</button></form>{% endif %}
         </div>{% endif %}
       </td>
     </tr>

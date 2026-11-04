@@ -45,6 +45,12 @@ An online loan application system. Staff log in with a username and password, fi
 
 Without `DATABASE_URL`, the app uses a local SQLite file instead. On Vercel that file is **temporary** and gets deleted, so a red warning appears on every page while this is the case.
 
+## Backups, Excel export and alert emails
+- **Nightly backup to Google Drive** (`/cron/backup`, 02:43 Pakistan time): the whole database (all tables, documents included; password hashes left out) as gzip JSON, written over this weekday's file `Tooba Backup - <Day>.json.gz` in the `GOOGLE_DRIVE_FOLDER_ID` folder, so the last 7 days are kept (Drive also keeps older versions of each file for 30 days). A Gmail service account cannot own files, so these 7 files must exist in the folder (made once by the owner account); the app only replaces their content. Admin can also press *Backup Drive par abhi* on the Applications page.
+- **Poora data (Excel)** (`/admin/export.xlsx`, needs `export`): Applications, Disbursements (with cheques) and Users in one workbook.
+- **Alert emails** to the Admin: website errors, a login lock after repeated wrong passwords, a failed nightly backup, and Google Sheets tabs that keep failing. Same alert at most every 30 minutes (backup / sheets: once a day). Off until these are set in Vercel:
+  `SMTP_USER` (Gmail address that sends), `SMTP_PASSWORD` (a Gmail **App password**, not the normal one), optional `ALERT_EMAIL_TO` (comma separated; default `SMTP_USER`), `SMTP_HOST` / `SMTP_PORT` (default `smtp.gmail.com` / `465`).
+
 ## Deploy (Vercel + Supabase)
 1. Create a Supabase project. Go to *Connect* (or *Project Settings → Database*), copy the **Transaction pooler** connection string (port 6543) and put your database password into it.
 2. In Vercel, go to *Project → Settings → Environment Variables* and add:

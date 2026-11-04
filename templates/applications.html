@@ -33,7 +33,9 @@
 <div class="row no-print">
   {% if can('export') %}
   <a class="btn light small" href="{{ url_for('export_csv') }}">{{ icon('download') }} Export CSV (Excel)</a>
+  <a class="btn light small" href="{{ url_for('export_xlsx') }}">{{ icon('download') }} Poora data (Excel)</a>
   <a class="btn light small" href="{{ url_for('backup_export') }}">{{ icon('database') }} Download backup</a>
+  <form method="post" action="{{ url_for('backup_drive_now') }}" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn light small">{{ icon('database') }} Backup Drive par abhi</button></form>
   {% endif %}
 </div>
 {% endif %}

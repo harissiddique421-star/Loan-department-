@@ -360,3 +360,28 @@ def test_database_refuses_deleting_closed_sheet(pg, admin, appm):
     admin.post(f"/disbursement/{bid}/close")
     with pytest.raises(Exception, match="Only an open sheet"):
         pg.execute("update disbursement_batch set deleted_at = now(), delete_reason = 'x' where id = %s", (bid,))
+
+
+def test_admin_can_undo_paid_then_delete(admin, staff, reviewer, appm):
+    pk = new_app(staff, name="Paid Wapas", cnic="4210177700003")
+    approve(admin, staff, reviewer, pk, "DEL-3")
+    bid, _ = new_batch(admin, date="2026-11-25")
+    admin.post(f"/disbursement/{bid}/add", data={"app_id": [pk]})
+    e = entry_of(appm, pk)
+    admin.post(f"/disbursement/entry/{e}/disbursed")
+    page = text_of(admin.get(f"/disbursement/{bid}"))
+    assert "Undo Paid" in page and "Paid</b> rows hain" in page
+    assert "Undo Paid" not in text_of(reviewer.get(f"/disbursement/{bid}"))
+    # only Admin, and only with a reason
+    assert reviewer.post(f"/disbursement/entry/{e}/undo-paid", data={"reason": "x"}).status_code == 403
+    admin.post(f"/disbursement/entry/{e}/undo-paid", data={"reason": ""})
+    assert get_row(pk).status == "Disbursed"
+    admin.post(f"/disbursement/entry/{e}/undo-paid", data={"reason": "Ghalti se Paid laga"})
+    assert get_row(pk).status == "Added to Disbursement Sheet"
+    with appm.app.app_context():
+        assert appm.db.session.get(appm.DisbursementEntry, e).disbursed_at is None
+        assert appm.AuditLog.query.filter_by(action="disbursement.undo_paid", entity_id=e).count() == 1
+    admin.post(f"/disbursement/{bid}/delete", data={"reason": "Test sheet"})
+    assert get_row(pk).status == "Ready for Disbursement"
+    with appm.app.app_context():
+        assert appm.db.session.get(appm.DisbursementBatch, bid).deleted_at

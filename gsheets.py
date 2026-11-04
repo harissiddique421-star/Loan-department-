@@ -25,6 +25,7 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapi
 SERVICE_ACCOUNT_SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 SHEETS = "https://sheets.googleapis.com/v4/spreadsheets"
 DRIVE = "https://www.googleapis.com/drive/v3/files"
+DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 
 
 def title_for(year):
@@ -147,3 +148,37 @@ class GoogleClient:
         reqs.append({"autoResizeDimensions": {"dimensions": {"sheetId": sheet_id, "dimension": "COLUMNS",
                                                              "startIndex": 0, "endIndex": 12}}})
         self._call("POST", f"{SHEETS}/{spreadsheet_id}:batchUpdate", json={"requests": reqs})
+
+    def put_file(self, name, data, mime="application/gzip"):
+        """Overwrite the file called `name` in the Drive folder with `data`.
+
+        With a plain Gmail account a service account cannot own files, so the file must already
+        exist (made by the Admin / owner account); the service account only replaces its content.
+        Drive keeps the earlier versions for 30 days."""
+        from urllib.parse import quote
+        folder = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+        q = "trashed = false"
+        if folder:
+            q += f" and '{folder}' in parents"
+        res = self._call("GET", f"{DRIVE}?q={quote(q)}&supportsAllDrives=true&includeItemsFromAllDrives=true"
+                                f"&pageSize=200&fields=files(id,name)")
+        match = [f for f in res.get("files", []) if f.get("name") == name]
+        if match:
+            self._call("PATCH", f"{DRIVE_UPLOAD}/{match[0]['id']}?uploadType=media&supportsAllDrives=true&fields=id",
+                       data=data, headers={"Content-Type": mime})
+            return match[0]["id"]
+        boundary = "tooba-backup-boundary"
+        meta = {"name": name, "mimeType": mime}
+        if folder:
+            meta["parents"] = [folder]
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{json.dumps(meta)}\r\n"
+                f"--{boundary}\r\nContent-Type: {mime}\r\n\r\n").encode() + data + f"\r\n--{boundary}--".encode()
+        try:
+            f = self._call("POST", f"{DRIVE_UPLOAD}?uploadType=multipart&supportsAllDrives=true&fields=id",
+                           data=body, headers={"Content-Type": f"multipart/related; boundary={boundary}"})
+        except GoogleError as exc:
+            if "storageQuotaExceeded" in str(exc) or "storage quota" in str(exc):
+                raise GoogleError(f'Drive folder mein "{name}" file maujood nahi. Admin account se ye file '
+                                  "folder mein bana dein (service account khud file nahi bana sakta).") from exc
+            raise
+        return f["id"]
