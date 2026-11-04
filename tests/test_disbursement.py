@@ -243,7 +243,9 @@ class FakeGoogle:
         self.created.append(year)
         return f"sheet{year}", f"https://docs.google.com/spreadsheets/d/sheet{year}", {"November": 11, "Yearly Summary": 99}
 
-    def write_layout(self, sid, tab, sheet_id, grid):
+    def write_layout(self, sid, year, month, grid):
+        import gsheets
+        tab = gsheets.tab_title(month, year)
         if self.fail:
             raise RuntimeError("Google is down")
         self.writes[(sid, tab)] = grid.values()
@@ -268,16 +270,16 @@ def test_google_sync(admin, staff, reviewer, appm, monkeypatch):
     assert appm.app.test_client().get("/cron/gsheets").status_code == 401
     r = appm.app.test_client().get("/cron/gsheets", headers={"Authorization": "Bearer cron-test"})
     assert r.status_code == 200 and r.get_json()["synced"] >= 2
-    rows = fake.writes[("sheet2026", "November")]
+    rows = fake.writes[("sheet2026", "November 2026")]
     assert sum(1 for row in rows if "Google Person" in row) == 1
     # a cheque change rewrites the tab — still exactly one row, and no second spreadsheet
     e = entry_of(appm, pk)
     reviewer.post(f"/disbursement/entry/{e}/cheque", data={"cheque_no": "55501", "status": "Issued"})
-    rows = fake.writes[("sheet2026", "November")]
+    rows = fake.writes[("sheet2026", "November 2026")]
     assert sum(1 for row in rows if "Google Person" in row) == 1
     assert any("55501" in row for row in rows)
     assert fake.created == [2026]
-    assert ("sheet2026", "Yearly Summary") in fake.writes
+    assert ("sheet2026", "Yearly Summary 2026") in fake.writes
     page = text_of(admin.get("/admin/google-sheets"))
     assert "sheet2026" in page and "Failed" in page and "OK" in page
     assert "Google Sheet" in text_of(reviewer.get(f"/disbursement/{bid}"))
@@ -317,7 +319,7 @@ def test_admin_can_delete_open_sheet(admin, staff, reviewer, appm, monkeypatch):
     admin.post(f"/disbursement/{bid}/add", data={"app_id": [pk]})
     e = entry_of(appm, pk)
     reviewer.post(f"/disbursement/entry/{e}/cheque", data={"cheque_no": "DEL-CHQ-1", "status": "Issued"})
-    assert any("Delete Me" in row for row in fake.writes[("sheet2026", "November")])
+    assert any("Delete Me" in row for row in fake.writes[("sheet2026", "November 2026")])
     # only Admin, and only with a reason
     assert reviewer.post(f"/disbursement/{bid}/delete", data={"reason": "x"}).status_code == 403
     admin.post(f"/disbursement/{bid}/delete", data={"reason": ""})
@@ -331,7 +333,7 @@ def test_admin_can_delete_open_sheet(admin, staff, reviewer, appm, monkeypatch):
     assert entry_of(appm, pk) is None and get_row(pk).status == "Ready for Disbursement"
     assert admin.get(f"/disbursement/{bid}").status_code == 404
     assert f">{number}<" not in text_of(admin.get("/disbursement"))
-    assert not any("Delete Me" in row for row in fake.writes[("sheet2026", "November")])
+    assert not any("Delete Me" in row for row in fake.writes[("sheet2026", "November 2026")])
     # the application can go on a new sheet, and the cheque number can be used again
     bid2, _ = new_batch(admin, date="2026-11-22")
     admin.post(f"/disbursement/{bid2}/add", data={"app_id": [pk]})
@@ -396,7 +398,7 @@ def test_google_sheet_looks_like_printed_sheet(admin, staff, reviewer, appm, mon
     approve(admin, staff, reviewer, pk, "GS-1")
     bid, number = new_batch(admin, date="2026-12-05")
     admin.post(f"/disbursement/{bid}/add", data={"app_id": [pk]})
-    grid = fake.grids[("sheet2026", "December")]
+    grid = fake.grids[("sheet2026", "December 2026")]
     vals = grid.values()
     flat = [str(v) for row in vals for v in row]
     for text in ("THE TOOBA FOUNDATION", "& Community Center", "S.No", "Cheque No.", "Form Fees",

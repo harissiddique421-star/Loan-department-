@@ -2392,9 +2392,9 @@ def run_sync(limit=4):
             gy = ensure_year(row.year, client)
             if gy is None:
                 continue
-            tab = gsheets.SUMMARY if row.month == 0 else gsheets.MONTHS[row.month - 1]
+            tab = gsheets.tab_title(row.month, row.year)
             grid = summary_layout(row.year) if row.month == 0 else month_layout(row.year, row.month)
-            client.write_layout(gy.spreadsheet_id, tab, (gy.tab_ids or {}).get(tab), grid)
+            client.write_layout(gy.spreadsheet_id, row.year, row.month, grid)
             row = db.session.get(GsheetSync, key)
             row.dirty, row.synced_at, row.last_error = False, datetime.utcnow(), None
             db.session.add(GsheetSyncLog(year=key[0], month=key[1], ok=True, message=f"Synced {tab}"))

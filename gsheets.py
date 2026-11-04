@@ -28,6 +28,20 @@ DRIVE = "https://www.googleapis.com/drive/v3/files"
 DRIVE_UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 
 
+def tab_title(month, year):
+    """Tab name: "November 2026" (month 1-12) or "Yearly Summary 2026" (month 0)."""
+    return f"{SUMMARY if month == 0 else MONTHS[month - 1]} {int(year)}"
+
+
+def legacy_title(month):
+    """Tab name used before the year was added ("November", "Yearly Summary")."""
+    return SUMMARY if month == 0 else MONTHS[month - 1]
+
+
+def all_tabs(year):
+    return [(m, tab_title(m, year)) for m in list(range(1, 13)) + [0]]
+
+
 def title_for(year):
     return f"Tooba Foundation – Master Disbursement {year}"
 
@@ -90,9 +104,10 @@ class GoogleClient:
         sid = f["id"]
         info = self._call("GET", f"{SHEETS}/{sid}?fields=sheets.properties")
         first = info["sheets"][0]["properties"]["sheetId"]
-        reqs = [{"updateSheetProperties": {"properties": {"sheetId": first, "title": MONTHS[0]},
+        titles = [t for _, t in all_tabs(year)]
+        reqs = [{"updateSheetProperties": {"properties": {"sheetId": first, "title": titles[0]},
                                            "fields": "title"}}]
-        reqs += [{"addSheet": {"properties": {"title": t}}} for t in MONTHS[1:] + [SUMMARY]]
+        reqs += [{"addSheet": {"properties": {"title": t}}} for t in titles[1:]]
         self._call("POST", f"{SHEETS}/{sid}:batchUpdate", json={"requests": reqs})
         info = self._call("GET", f"{SHEETS}/{sid}?fields=sheets.properties,spreadsheetUrl")
         tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
@@ -124,19 +139,48 @@ class GoogleClient:
         sid = files[0]["id"]
         info = self._call("GET", f"{SHEETS}/{sid}?fields=sheets.properties,spreadsheetUrl")
         tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
-        missing = [t for t in MONTHS + [SUMMARY] if t not in tabs]
-        if missing:
-            self._call("POST", f"{SHEETS}/{sid}:batchUpdate",
-                       json={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]})
+        reqs = self._tab_requests(tabs, year)
+        if reqs:
+            self._call("POST", f"{SHEETS}/{sid}:batchUpdate", json={"requests": reqs})
             info = self._call("GET", f"{SHEETS}/{sid}?fields=sheets.properties,spreadsheetUrl")
             tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
         return sid, info.get("spreadsheetUrl"), tabs
 
-    def write_layout(self, spreadsheet_id, tab, sheet_id, grid):
-        """Replace one tab with a sheet_layout.Grid (values, formats, merges, sizes) in one call."""
-        if sheet_id is None:
-            info = self._call("GET", f"{SHEETS}/{spreadsheet_id}?fields=sheets.properties")
-            sheet_id = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}[tab]
+    @staticmethod
+    def _tab_requests(tabs, year, only=None):
+        """Rename old "November" tabs to "November 2026" (same tab, nothing lost) and add any
+        that are missing."""
+        reqs = []
+        for m, title in all_tabs(year):
+            if only is not None and m != only or title in tabs:
+                continue
+            old = legacy_title(m)
+            if old in tabs:
+                reqs.append({"updateSheetProperties": {"properties": {"sheetId": tabs[old], "title": title},
+                                                       "fields": "title"}})
+            else:
+                reqs.append({"addSheet": {"properties": {"title": title}}})
+        return reqs
+
+    def tab_id(self, spreadsheet_id, year, month):
+        """sheetId of the month's tab, renaming or adding it when needed."""
+        title = tab_title(month, year)
+        info = self._call("GET", f"{SHEETS}/{spreadsheet_id}?fields=sheets.properties")
+        tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
+        if title in tabs:
+            return tabs[title]
+        reqs = self._tab_requests(tabs, year, only=month)
+        res = self._call("POST", f"{SHEETS}/{spreadsheet_id}:batchUpdate",
+                         json={"requests": reqs, "includeSpreadsheetInResponse": False})
+        reply = (res.get("replies") or [{}])[0]
+        if "addSheet" in reply:
+            return reply["addSheet"]["properties"]["sheetId"]
+        return tabs[legacy_title(month)]
+
+    def write_layout(self, spreadsheet_id, year, month, grid):
+        """Replace one month's tab (month 0 = Yearly Summary) with a sheet_layout.Grid
+        (values, formats, merges, sizes) in one call."""
+        sheet_id = self.tab_id(spreadsheet_id, year, month)
         self._call("POST", f"{SHEETS}/{spreadsheet_id}:batchUpdate", json={"requests": grid.requests(sheet_id)})
 
     def write_tab(self, spreadsheet_id, tab, sheet_id, rows, bold_rows=()):
