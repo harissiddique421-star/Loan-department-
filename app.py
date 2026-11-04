@@ -75,6 +75,9 @@ lm.session_protection = "strong"   # a session cookie copied to another browser/
 
 # Brute-force protection: after this many wrong passwords within the window, login is blocked.
 LOGIN_MAX_FAILS = int(os.getenv("LOGIN_MAX_FAILS", "5"))
+# Short passwords are allowed so staff can log in easily; the lock above (5 wrong tries)
+# is what stops guessing.
+MIN_PASSWORD_LEN = int(os.getenv("MIN_PASSWORD_LEN", "5"))
 LOGIN_WINDOW = timedelta(minutes=int(os.getenv("LOGIN_LOCK_MINUTES", "15")))
 
 # ---------------------------------------------------------------- roles, permissions, workflow
@@ -784,7 +787,7 @@ def inject_globals():
             "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS,
             "PHOTO_SLOTS": PHOTO_SLOTS, "PHOTO_LABELS": PHOTO_LABELS, "can": can,
             "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES, "PORTAL_INFO": PORTAL_INFO,
-            "CNIC_GROUPS": CNIC_GROUPS, "CNIC_LABELS": CNIC_LABELS, "money": money,
+            "CNIC_GROUPS": CNIC_GROUPS, "MIN_PASSWORD_LEN": MIN_PASSWORD_LEN, "CNIC_LABELS": CNIC_LABELS, "money": money,
             "portal": PORTAL_INFO.get(role), "portal_key": SECTION_OF_ROLE.get(role),
             "nav": nav_items(role) if role else []}
 
@@ -883,8 +886,8 @@ def change_password():
     if request.method == "POST":
         if not current_user.check_password(request.form.get("current", "")):
             flash("Purana password ghalat hai.")
-        elif len(request.form.get("new", "")) < 8:
-            flash("Naya password kam az kam 8 characters ka ho.")
+        elif len(request.form.get("new", "")) < MIN_PASSWORD_LEN:
+            flash(f"Naya password kam az kam {MIN_PASSWORD_LEN} characters ka ho.")
         elif request.form.get("new") != request.form.get("confirm"):
             flash("Dono naye password match nahi karte.")
         else:
@@ -1486,8 +1489,8 @@ def users():
         password = request.form.get("password", "")
         role = request.form.get("role", "Staff")
         full_name = request.form.get("full_name", "").strip()[:120] or None
-        if role not in ROLES or not username or len(password) < 8:
-            flash("Username aur kam az kam 8 character password zaroori hai.")
+        if role not in ROLES or not username or len(password) < MIN_PASSWORD_LEN:
+            flash(f"Username aur kam az kam {MIN_PASSWORD_LEN} character password zaroori hai.")
         elif User.query.filter_by(username=username).first():
             flash("Ye username pehle se mojood hai.")
         else:
@@ -1543,8 +1546,8 @@ def toggle_user(uid):
 def reset_password(uid):
     u = db.get_or_404(User, uid)
     p = request.form.get("password", "")
-    if len(p) < 8:
-        flash("Password kam az kam 8 characters ka ho.")
+    if len(p) < MIN_PASSWORD_LEN:
+        flash(f"Password kam az kam {MIN_PASSWORD_LEN} characters ka ho.")
     else:
         u.set_password(p)
         audit("user.password_reset", entity="user", entity_id=u.id)

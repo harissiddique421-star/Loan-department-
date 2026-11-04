@@ -112,3 +112,18 @@ def test_admin_only_powers_not_assignable(admin, staff, appm):
         perms = {p for (p,) in appm.db.session.query(appm.RolePermission.permission).filter_by(role="Staff")}
     assert "audit.view" not in perms and "reports.view" not in perms
     assert staff.get("/admin/audit").status_code == 403
+
+
+def test_short_passwords_allowed_and_lock_after_5(admin, appm):
+    admin.post("/admin/users", data={"username": "shortpw", "password": "ab12", "role": "Staff"})
+    with appm.app.app_context():
+        assert appm.User.query.filter_by(username="shortpw").first() is None      # 4 is too short
+    admin.post("/admin/users", data={"username": "shortpw", "password": "ab123", "role": "Staff"})
+    c = UserClient("shortpw", "ab123", "staff")
+    assert c.get("/staff").status_code == 200
+    admin.post(f"/admin/users/{uid('shortpw')}/password", data={"password": "xy789"})
+    UserClient("shortpw", "xy789", "staff")
+    c2 = appm.app.test_client()
+    for _ in range(5):
+        c2.post("/login/staff", data={"username": "shortpw", "password": "wrong"})
+    assert c2.post("/login/staff", data={"username": "shortpw", "password": "xy789"}).status_code == 429

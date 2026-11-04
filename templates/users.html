@@ -8,7 +8,7 @@
   <div class="grid">
     <div><label for="nf">Poora naam</label><div class="field-icon">{{ icon('user') }}<input id="nf" name="full_name" maxlength="120" autocomplete="off"></div></div>
     <div><label for="nu">Username</label><div class="field-icon">{{ icon('user') }}<input id="nu" name="username" required autocomplete="off"></div></div>
-    <div><label for="np">Password (8+ characters)</label><div class="pw field-icon">{{ icon('key') }}<input id="np" name="password" type="password" minlength="8" required autocomplete="new-password"><button type="button" data-toggle-pw="np" aria-label="Password dikhayein">{{ icon('eye') }}</button></div></div>
+    <div><label for="np">Password ({{ MIN_PASSWORD_LEN }}+ characters)</label><div class="pw field-icon">{{ icon('key') }}<input id="np" name="password" type="password" minlength="{{ MIN_PASSWORD_LEN }}" required autocomplete="new-password"><button type="button" data-toggle-pw="np" aria-label="Password dikhayein">{{ icon('eye') }}</button></div></div>
     <div><label for="nr">Role</label><select id="nr" name="role"><option value="Staff">Staff — application banana, bharna, submit karna</option><option value="Reviewer">Reviewer — assigned applications review, approve / reject</option><option value="Admin">Admin — sab kuch</option></select></div>
   </div>
   <p style="margin:16px 0 0"><button class="btn">{{ icon('plus') }} Add user</button></p>
@@ -21,7 +21,7 @@
     <td><span class="who"><span class="av">{{ u.username[:1]|upper }}</span><span><b>{{ u.username }}</b>{% if u.full_name %}<small>{{ u.full_name }}</small>{% endif %}</span></span></td>
     <td>{% if u.id != current_user.id %}<form method="post" action="{{ url_for('change_role', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><select name="role" aria-label="Role for {{ u.username }}">{% for r in ROLES %}<option {{ 'selected' if u.role == r }}>{{ r }}</option>{% endfor %}</select> <button class="btn small light">Set</button></form>{% else %}<span class="role {{ u.role }}">{{ u.role }}</span>{% endif %}</td>
     <td>{% if u.active %}<span class="state-on">Active</span>{% else %}<span class="state-off">Disabled</span>{% endif %}</td>
-    <td><form method="post" action="{{ url_for('reset_password', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="password" type="password" placeholder="Naya password" minlength="8" required autocomplete="new-password" aria-label="Naya password for {{ u.username }}"><button class="btn small light">{{ icon('key') }} Set</button></form></td>
+    <td><form method="post" action="{{ url_for('reset_password', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="password" type="password" placeholder="Naya password" minlength="{{ MIN_PASSWORD_LEN }}" required autocomplete="new-password" aria-label="Naya password for {{ u.username }}"><button class="btn small light">{{ icon('key') }} Set</button></form></td>
     <td style="text-align:right">{% if u.id != current_user.id %}<form method="post" action="{{ url_for('toggle_user', uid=u.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small {{ 'danger' if u.active else 'light' }}">{{ 'Disable' if u.active else 'Enable' }}</button></form>{% endif %}</td>
   </tr>
   {% endfor %}
