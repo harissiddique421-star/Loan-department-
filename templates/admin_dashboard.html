@@ -27,9 +27,15 @@
   </section>
   <section class="card rise" style="--i:3">
     <div class="card-head"><h2>{{ icon('clock') }} Taaza activity</h2><a class="muted" href="{{ url_for('audit_log') }}">Poora audit log</a></div>
-    <ul class="mini">{% for h in recent_audit %}
-      <li><span><b>{{ h.actor_name or 'System' }}</b> — {{ ACTION_LABELS.get(h.action, h.action) }}<span class="sub">{{ h.created_at.strftime('%d %b %Y, %H:%M') }}{% if h.reason %} · {{ h.reason }}{% endif %}</span></span></li>
-    {% else %}<li class="muted">Abhi koi activity nahi.</li>{% endfor %}</ul>
+    {% macro act(h) %}<li><span><b>{{ h.actor_name or 'System' }}</b> — {{ ACTION_LABELS.get(h.action, h.action) }}<span class="sub">{{ h.created_at.strftime('%d %b %Y, %H:%M') }}{% if h.reason %} · {{ h.reason }}{% endif %}</span></span></li>{% endmacro %}
+    <ul class="mini">{% for h in recent_audit[:4] %}{{ act(h) }}{% else %}<li class="muted">Abhi koi activity nahi.</li>{% endfor %}</ul>
+    {% if recent_audit|length > 4 %}
+    <details class="more">
+      <summary>Sab dekhein ({{ recent_audit|length - 4 }} aur)</summary>
+      <ul class="mini">{% for h in recent_audit[4:] %}{{ act(h) }}{% endfor %}</ul>
+      <a class="muted" href="{{ url_for('audit_log') }}">Poora audit log kholein →</a>
+    </details>
+    {% endif %}
   </section>
 </div>
 
