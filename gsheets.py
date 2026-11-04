@@ -19,6 +19,10 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July", "Augus
           "September", "October", "November", "December"]
 SUMMARY = "Yearly Summary"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"]
+# A service account only ever reaches files and folders someone explicitly shared with it, so
+# it gets the full Drive scope: "drive.file" would hide the hand-made yearly spreadsheet
+# (that scope only covers files the app itself created).
+SERVICE_ACCOUNT_SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 SHEETS = "https://sheets.googleapis.com/v4/spreadsheets"
 DRIVE = "https://www.googleapis.com/drive/v3/files"
 
@@ -57,7 +61,7 @@ class GoogleClient:
         if os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"):
             from google.oauth2 import service_account
             info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"])
-            creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+            creds = service_account.Credentials.from_service_account_info(info, scopes=SERVICE_ACCOUNT_SCOPES)
         elif os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN"):
             from google.oauth2.credentials import Credentials
             creds = Credentials(None, refresh_token=os.environ["GOOGLE_OAUTH_REFRESH_TOKEN"],
