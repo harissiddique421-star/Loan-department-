@@ -1,4 +1,4 @@
-import os, json, secrets, csv, io, hashlib
+import os, json, secrets, csv, io, hashlib, hmac
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
@@ -17,6 +17,7 @@ from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, 
 import gsheets
 import alerts
 import backup
+import sheet_layout
 
 app = Flask(__name__)
 
@@ -2265,39 +2266,60 @@ def app_link(app_pk):
     return base.rstrip("/") + f"/application/{app_pk}" if base else ""
 
 
-def month_rows(year, month):
-    rows, bold = [], []
+def gsheet_photo_sig(entry_id):
+    """Secret link part that lets Google Sheets load one applicant photo without a login."""
+    return hmac.new(app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key,
+                    f"gsheet-photo:{entry_id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def _public_base():
+    base = os.getenv("APP_BASE_URL") or (request.url_root if has_request_context() else "")
+    return base.rstrip("/")
+
+
+def gsheet_photo_url(row):
+    base = _public_base()
+    if not base or os.getenv("GSHEET_PHOTOS", "1") == "0":
+        return None
+    eid = row["entry"].id
+    return f"{base}/gs/photo/{eid}/{gsheet_photo_sig(eid)}"
+
+
+@app.route("/gs/photo/<int:eid>/<sig>")
+def gsheet_photo(eid, sig):
+    """Applicant photo for the Google Sheets copy. No login; the link itself is the key
+    (HMAC with SECRET_KEY), and it only works for rows still on a live disbursement sheet."""
+    if os.getenv("GSHEET_PHOTOS", "1") == "0" or not secrets.compare_digest(sig, gsheet_photo_sig(eid)):
+        abort(404)
+    g._db_actor = ("", "system")
+    if not USING_SQLITE and db.session().in_transaction():
+        db.session.execute(_SET_ACTOR, {"u": "", "r": "system"})
+    e = db.session.get(DisbursementEntry, eid)
+    b = db.session.get(DisbursementBatch, e.batch_id) if e else None
+    if not e or e.removed_at or not b or b.deleted_at:
+        abort(404)
+    a = db.session.get(Application, e.application_id)
+    p = a.latest_photo("photo") if a else None
+    if not p or not (p.content_type or "").startswith("image/"):
+        return redirect(url_for("static", filename="no-photo.svg"))
+    resp = send_file(io.BytesIO(read_file(p)), mimetype=p.content_type)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    resp.headers["X-Robots-Tag"] = "noindex"
+    return resp
+
+
+def month_layout(year, month):
     batches = (DisbursementBatch.query.filter_by(year=year, month=month).filter(DisbursementBatch.deleted_at.is_(None))
                .order_by(DisbursementBatch.disb_date, DisbursementBatch.number).all())
-    total_n = total_amt = total_fee = 0
-    for b in batches:
-        s = sheet_data(b)
-        bold += [len(rows), len(rows) + 1, len(rows) + 2]
-        rows.append(["TOOBA FOUNDATION", "", "", "", "", "", "", "", "", "", "",
-                     "Closed" if b.closed else "Open"])
-        rows.append([f"Disbursement Number {s['number_text']}", "", "", s["date_text"]])
-        rows.append(["S.No", "Name", "CNIC No.", "Cell No.", "Amount", "Purpose", "Loan No.", "Cheque No.",
-                     "Photo", "Signature", "Thumb", "Form Fees"])
-        for r in s["rows"]:
-            rows.append([r["sno"], r["name"], r["cnic"], r["phone"], r["amount"], r["purpose"], r["loan_no"],
-                         r["cheque_no"], app_link(r["application_id"]), "", "", r["fee"]])
-        bold.append(len(rows))
-        rows.append(["", "Total Amount", "", "", s["total_amount"], "", f"Applicants: {s['count']}", "", "",
-                     "", "", s["total_fees"]])
-        rows.append([])
-        total_n, total_amt, total_fee = total_n + s["count"], total_amt + s["total_amount"], total_fee + s["total_fees"]
-    if batches:
-        bold.append(len(rows))
-        rows.append(["", "Month total", "", "", total_amt, "", f"Applicants: {total_n}", "", "", "", "", total_fee])
-    return rows, bold
+    base = _public_base()
+    return sheet_layout.month_grid(
+        [(sheet_data(b), "Closed" if b.closed else "Open") for b in batches],
+        link=lambda r: app_link(r["application_id"]), photo=gsheet_photo_url,
+        logo_url=f"{base}/static/tooba-logo.png" if base else None)
 
 
-def summary_rows(year):
-    rows = [["Tooba Foundation – Yearly Summary", str(year)], [],
-            ["Month", "Sheets", "Applicants", "Total Amount", "Disbursed Amount", "Form Fees"]]
-    bold = [0, 2]
-    tot = [0, 0, 0, 0, 0]
-    purpose, fees = {}, {}
+def summary_layout(year):
+    months, purpose, fees = [], {}, {}
     for m in range(1, 13):
         bs = DisbursementBatch.query.filter_by(year=year, month=m).filter(DisbursementBatch.deleted_at.is_(None)).all()
         vals = [len(bs), 0, 0, 0, 0]
@@ -2314,17 +2336,12 @@ def summary_rows(year):
                 fees.setdefault(r["fee"], [0, 0])
                 fees[r["fee"]][0] += 1
                 fees[r["fee"]][1] += r["fee"]
-        rows.append([gsheets.MONTHS[m - 1]] + vals)
-        tot = [x + y for x, y in zip(tot, vals)]
-    bold.append(len(rows))
-    rows.append(["Total"] + tot)
-    rows += [[], ["Purpose", "Number of Loans", "Loan Amount"]]
-    bold.append(len(rows) - 1)
-    rows += [[k, v[0], v[1]] for k, v in sorted(purpose.items())]
-    rows += [[], ["Form Fee", "Fee Collection", "Fee Amount"]]
-    bold.append(len(rows) - 1)
-    rows += [[k, v[0], v[1]] for k, v in sorted(fees.items(), reverse=True)]
-    return rows, bold
+        months.append([gsheets.MONTHS[m - 1]] + vals)
+    base = _public_base()
+    return sheet_layout.summary_grid(
+        year, months, [[k, v[0], v[1]] for k, v in sorted(purpose.items())],
+        [[k, v[0], v[1]] for k, v in sorted(fees.items(), reverse=True)],
+        logo_url=f"{base}/static/tooba-logo.png" if base else None)
 
 
 def ensure_year(year, client):
@@ -2375,9 +2392,9 @@ def run_sync(limit=4):
             gy = ensure_year(row.year, client)
             if gy is None:
                 continue
-            tab = gsheets.SUMMARY if row.month == 0 else gsheets.MONTHS[row.month - 1]
-            values, bold = summary_rows(row.year) if row.month == 0 else month_rows(row.year, row.month)
-            client.write_tab(gy.spreadsheet_id, tab, (gy.tab_ids or {}).get(tab), values, bold)
+            tab = gsheets.tab_title(row.month, row.year)
+            grid = summary_layout(row.year) if row.month == 0 else month_layout(row.year, row.month)
+            client.write_layout(gy.spreadsheet_id, row.year, row.month, grid)
             row = db.session.get(GsheetSync, key)
             row.dirty, row.synced_at, row.last_error = False, datetime.utcnow(), None
             db.session.add(GsheetSyncLog(year=key[0], month=key[1], ok=True, message=f"Synced {tab}"))

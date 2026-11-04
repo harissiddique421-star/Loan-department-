@@ -45,6 +45,9 @@ An online loan application system. Staff log in with a username and password, fi
 
 Without `DATABASE_URL`, the app uses a local SQLite file instead. On Vercel that file is **temporary** and gets deleted, so a red warning appears on every page while this is the case.
 
+## Google Sheets layout
+Tabs are named with the year ("November 2026", "Yearly Summary 2026"; old tabs without the year are renamed in place, nothing is lost). Each month tab is drawn like the printed sheet (`sheet_layout.py`): banner with logo, "Disbursement Number" and date box, the 12-column table with borders and applicant photos, totals, the Disbursement Report (fee-wise and purpose-wise) and the President / General Secretary / Enquiry Officer lines. The Yearly Summary tab gets the same banner and boxed tables. Photos are loaded by Google from `/gs/photo/<entry>/<key>`, a link signed with `SECRET_KEY` that works only while the row is on a live sheet; set `GSHEET_PHOTOS=0` to show a "View" link to the app instead. After a deploy, press *Resync all* on Admin → Google Sheets to redraw existing tabs.
+
 ## Backups, Excel export and alert emails
 - **Nightly backup to Google Drive** (`/cron/backup`, 02:43 Pakistan time): the whole database (all tables, documents included; password hashes left out) as gzip JSON, written over this weekday's file `Tooba Backup - <Day>.json.gz` in the `GOOGLE_DRIVE_FOLDER_ID` folder, so the last 7 days are kept (Drive also keeps older versions of each file for 30 days). A Gmail service account cannot own files, so these 7 files must exist in the folder (made once by the owner account); the app only replaces their content. Admin can also press *Backup Drive par abhi* on the Applications page.
 - **Poora data (Excel)** (`/admin/export.xlsx`, needs `export`): Applications, Disbursements (with cheques) and Users in one workbook.
