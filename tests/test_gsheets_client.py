@@ -64,3 +64,31 @@ def test_service_account_can_see_shared_files(monkeypatch):
     assert gsheets.GoogleClient()._authed() == "session"
     assert "https://www.googleapis.com/auth/drive" in captured["scopes"]
     assert "https://www.googleapis.com/auth/drive.file" not in captured["scopes"]
+
+
+class DriveRecorder(gsheets.GoogleClient):
+    def __init__(self, names, quota_error=False):
+        super().__init__()
+        self.calls, self.names, self.quota_error = [], names, quota_error
+
+    def _call(self, method, url, **kw):
+        self.calls.append((method, url, kw.get("data")))
+        if method == "GET":
+            return {"files": [{"id": f"id{i}", "name": n} for i, n in enumerate(self.names)]}
+        if method == "POST" and self.quota_error:
+            raise gsheets.GoogleError("POST -> 403: storageQuotaExceeded")
+        return {"id": "new"}
+
+
+def test_backup_overwrites_existing_file():
+    c = DriveRecorder(["Tooba Backup - Sunday.json.gz", "Tooba Backup - Monday.json.gz"])
+    assert c.put_file("Tooba Backup - Monday.json.gz", b"data") == "id1"
+    method, url, data = c.calls[-1]
+    assert method == "PATCH" and url.startswith(gsheets.DRIVE_UPLOAD + "/id1?uploadType=media") and data == b"data"
+
+
+def test_backup_missing_file_explains_what_to_do():
+    import pytest
+    c = DriveRecorder([], quota_error=True)
+    with pytest.raises(gsheets.GoogleError, match="file maujood nahi"):
+        c.put_file("Tooba Backup - Friday.json.gz", b"data")

@@ -2,7 +2,8 @@ import os, json, secrets, csv, io, hashlib
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
-                   send_file, Response, jsonify, g, has_request_context, session)
+                   send_file, Response, jsonify, g, has_request_context, session,
+                   got_request_exception)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
@@ -14,6 +15,8 @@ from werkzeug.utils import secure_filename
 from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, PHOTO_KINDS,
                          PHOTO_LABELS)
 import gsheets
+import alerts
+import backup
 
 app = Flask(__name__)
 
@@ -867,6 +870,12 @@ def login_portal(portal):
             log_security(f"Login section={portal} ip={ip}", user_id=u.id)
             return redirect(url_for(info["home"]))
         log_security(f"LOGIN_FAIL user={username[:60]} ip={ip}", user_id=u.id if u else None)
+        if login_blocked(username, ip):
+            alert(f"lock:{username[:60]}", f"Login lock: {username[:60]}",
+                  f"Username \"{username[:60]}\" par {LOGIN_MAX_FAILS} ya zyada ghalat password try hue "
+                  f"aur login {int(LOGIN_WINDOW.total_seconds() // 60)} minute ke liye band ho gaya.\n"
+                  f"Section: {portal}\nIP: {ip}\nWaqt (UTC): {datetime.utcnow():%Y-%m-%d %H:%M}\n\n"
+                  "Agar ye aap ya aap ka staff nahi tha to koi password guess karne ki koshish kar raha hai.")
         flash("Username ya password ghalat hai, ya account disabled hai.")
     return render_template("login.html", portal_key=portal, info=info)
 
@@ -2420,17 +2429,169 @@ def google_sheets():
 @csrf.exempt
 def cron_gsheets():
     """Called by Vercel Cron. Retries failed syncs and creates the new year's spreadsheet in time."""
-    secret = os.getenv("CRON_SECRET")
-    if not secret or request.headers.get("Authorization") != f"Bearer {secret}":
-        abort(401)
-    g._db_actor = ("", "system")
-    if not USING_SQLITE and db.session().in_transaction():
-        db.session.execute(_SET_ACTOR, {"u": "", "r": "system"})
+    _cron_ok()
     year = (datetime.utcnow() + timedelta(hours=5)).year
     if not db.session.get(GsheetSync, (year, 0)) and (gsheets.configured() or GOOGLE_CLIENT):
         db.session.add(GsheetSync(year=year, month=0, dirty=True))
         db.session.commit()
-    return jsonify(synced=run_sync(limit=20))
+    n = run_sync(limit=20)
+    stuck = GsheetSync.query.filter(GsheetSync.dirty.is_(True), GsheetSync.attempts >= 3).all()
+    if stuck:
+        alert("gsheets", "Google Sheets sync FAILED",
+              "Ye tabs kai dafa koshish ke baad bhi Google Sheet par nahi gaye:\n"
+              + "\n".join(f"- {r.year} / {'Yearly Summary' if r.month == 0 else r.month}: {(r.last_error or '')[:200]}"
+                           for r in stuck[:10])
+              + "\n\nAdmin > Google Sheets page par 'Sync now' dabayein ya settings check karein.",
+              every=timedelta(hours=20))
+    return jsonify(synced=n)
+
+
+def _cron_ok():
+    secret = os.getenv("CRON_SECRET")
+    if not secret or not secrets.compare_digest(request.headers.get("Authorization", ""), f"Bearer {secret}"):
+        abort(401)
+    g._db_actor = ("", "system")
+    if not USING_SQLITE and db.session().in_transaction():
+        db.session.execute(_SET_ACTOR, {"u": "", "r": "system"})
+
+
+# ---------------------------------------------------------------- alerts
+_alert_mem = {}
+
+
+def alert(key, subject, body, every=timedelta(minutes=30)):
+    """Email the Admin, at most once per `every` for the same key. Never raises."""
+    if not alerts.configured():
+        return False
+    now = datetime.utcnow()
+    try:
+        recent = Log.query.filter(Log.action == f"ALERT {key}"[:200], Log.created_at >= now - every).count()
+        if recent:
+            return False
+        db.session.add(Log(user_id=None, action=f"ALERT {key}"[:200]))
+        db.session.commit()
+    except Exception:                       # database down: fall back to this server's memory
+        db.session.rollback()
+        if _alert_mem.get(key) and now - _alert_mem[key] < every:
+            return False
+    _alert_mem[key] = now
+    site = os.getenv("APP_BASE_URL", "")
+    return alerts.send(subject, body + (f"\n\nSite: {site}" if site else ""))
+
+
+@got_request_exception.connect_via(app)
+def _alert_on_error(sender, exception, **extra):
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    path = request.path if has_request_context() else "?"
+    alert("error", f"Website error: {type(exception).__name__}",
+          f"Website par ek error aaya (users ko 'Server error' dikha).\n\nPage: {path}\n"
+          f"Error: {type(exception).__name__}: {str(exception)[:300]}\n"
+          f"Waqt (UTC): {datetime.utcnow():%Y-%m-%d %H:%M}\n\n"
+          "Agar ye baar baar aaye to Vercel > Logs dekhein.")
+
+
+# ---------------------------------------------------------------- backup to Google Drive
+def drive_backup():
+    """Write the full backup to this weekday's file in the Drive folder. Returns the file name."""
+    if not (gsheets.configured() or GOOGLE_CLIENT):
+        raise RuntimeError("Google Drive configure nahi (GOOGLE_SERVICE_ACCOUNT_JSON).")
+    now = datetime.utcnow() + timedelta(hours=5)
+    data, counts = backup.build(db.session, db.metadata)
+    name = backup.file_name(now)
+    google_client().put_file(name, data)
+    audit("backup.drive", new={"file": name, "bytes": len(data), "rows": counts})
+    db.session.commit()
+    return name, len(data)
+
+
+@app.route("/cron/backup")
+@csrf.exempt
+def cron_backup():
+    """Called by Vercel Cron every night."""
+    _cron_ok()
+    try:
+        name, size = drive_backup()
+    except Exception as exc:
+        db.session.rollback()
+        alert("backup", "Backup FAILED", f"Raat ka database backup Google Drive par nahi gaya.\n\n{str(exc)[:500]}",
+              every=timedelta(hours=20))
+        return jsonify(ok=False, error=str(exc)[:300]), 500
+    return jsonify(ok=True, file=name, bytes=size)
+
+
+@app.route("/admin/backup/drive", methods=["POST"])
+@requires("export")
+def backup_drive_now():
+    try:
+        name, size = drive_backup()
+        flash(f"Backup Google Drive par save ho gaya: {name} ({size // 1024 + 1} KB).")
+    except Exception as exc:
+        db.session.rollback()
+        flash(f"Backup nahi hua: {str(exc)[:300]}")
+    return redirect(request.referrer or url_for("admin_applications"))
+
+
+# ---------------------------------------------------------------- full Excel export
+@app.route("/admin/export.xlsx")
+@requires("export")
+def export_xlsx():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    names = usernames()
+    wb = Workbook()
+
+    def sheet(ws, header, rows):
+        ws.append(header)
+        for c in ws[1]:
+            c.font, c.fill = Font(bold=True), PatternFill("solid", fgColor="ECF7EF")
+        for r in rows:
+            ws.append([v if isinstance(v, (int, float)) or v is None else csv_safe(v) for v in r])
+        ws.freeze_panes = "A2"
+        for i, h in enumerate(header, 1):
+            ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = max(12, min(40, len(str(h)) + 4))
+
+    num = lambda v: float(v) if v is not None else None
+    when = lambda v: v.strftime("%Y-%m-%d %H:%M") if v else None
+    apps = Application.query.order_by(Application.id).all()
+    keys = FIELD_NAMES + sorted({k for a in apps for k in a.data} - set(FIELD_NAMES))
+    ws = wb.active
+    ws.title = "Applications"
+    sheet(ws, ["Application ID", "Loan No.", "Status", "Name", "CNIC", "Loan amount", "Purpose", "Form fee",
+               "Created by", "Created", "Submitted", "Approved", "Reviewer", "Deleted"]
+          + [FIELD_LABELS.get(k, k) for k in keys],
+          [[a.app_id, a.loan_number, a.status, a.applicant_name, a.cnic, num(a.loan_amount), a.purpose_label,
+            num(a.fee_amount), names.get(a.created_by), when(a.created_at), when(a.submitted_at),
+            when(a.approved_at), names.get(a.reviewer_id), "Yes" if a.deleted_at else ""]
+           + [a.data.get(k, "") for k in keys] for a in apps])
+    by_app = {a.id: a.app_id for a in apps}
+    rows = (db.session.query(DisbursementEntry, DisbursementBatch)
+            .join(DisbursementBatch, DisbursementBatch.id == DisbursementEntry.batch_id)
+            .order_by(DisbursementBatch.number, DisbursementEntry.id).all())
+    cheques = {}
+    for c in Cheque.query.order_by(Cheque.id):
+        cheques.setdefault(c.entry_id, []).append(c)
+    sheet(wb.create_sheet("Disbursements"),
+          ["Sheet No.", "Sheet date", "Sheet status", "Application ID", "Name", "CNIC", "Cell", "Amount",
+           "Purpose", "Loan No.", "Form fee", "Cheque No.", "Cheque status", "Paid", "Removed / deleted"],
+          [[b.number, b.disb_date,
+            "Deleted" if b.deleted_at else b.status, by_app.get(e.application_id), e.name, e.cnic, e.phone,
+            num(e.amount), e.purpose, e.loan_number, num(e.fee_amount),
+            ", ".join(c.cheque_no for c in cheques.get(e.id, [])),
+            ", ".join(c.status for c in cheques.get(e.id, [])),
+            when(e.disbursed_at), e.remove_reason or ("Yes" if e.removed_at else "")] for e, b in rows])
+    sheet(wb.create_sheet("Users"), ["Username", "Name", "Role", "Active", "Created"],
+          [[u.username, u.full_name, u.role, "Yes" if u.active and not u.deleted_at else "No", when(u.created_at)]
+           for u in User.query.order_by(User.id)])
+    out = io.BytesIO()
+    wb.save(out)
+    audit("export.xlsx", new={"applications": len(apps), "disbursement_rows": len(rows)})
+    db.session.commit()
+    stamp = (datetime.utcnow() + timedelta(hours=5)).strftime("%Y-%m-%d")
+    return Response(out.getvalue(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename=tooba-all-data-{stamp}.xlsx"})
 
 
 # ---------------------------------------------------------------- reports
