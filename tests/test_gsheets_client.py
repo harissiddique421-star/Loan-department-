@@ -10,7 +10,9 @@ class Recorder(gsheets.GoogleClient):
     def _call(self, method, url, **kw):
         self.calls.append((method, url, kw.get("json")))
         if url.startswith(gsheets.DRIVE) and method == "GET":
-            return {"files": [{"id": "abc"}]}
+            return {"files": [{"id": "other", "name": "Budget 2026"},
+                              {"id": "abc", "name": "Tooba Foundation - Master  Disbursement 2026"},
+                              {"id": "old", "name": "Tooba Foundation - Master Disbursement 2025"}]}
         if url.endswith(":batchUpdate"):
             for r in kw["json"]["requests"]:
                 if "addSheet" in r:
@@ -29,7 +31,12 @@ def test_hand_made_sheet_gets_its_tabs():
     assert sid == "abc" and url.endswith("/abc")
     assert all(t in tabs for t in gsheets.MONTHS + [gsheets.SUMMARY])
     q = c.calls[0][1]
-    assert "Master%20Disbursement%202026" in q and "trashed%20%3D%20false" in q
+    assert "trashed%20%3D%20false" in q and "name%20contains" not in q
+
+
+def test_no_matching_sheet_returns_none():
+    c = Recorder({"Sheet1": 0})
+    assert c.find_year(2031) is None
 
 
 def test_complete_sheet_is_left_alone():

@@ -97,15 +97,23 @@ class GoogleClient:
         """An existing spreadsheet for the year — found by "Master Disbursement <year>" in its name,
         so a file the Admin created by hand (needed with a plain Gmail account, where a service
         account cannot own files) is used too. Missing month / summary tabs are added."""
-        q = (f"name contains 'Master Disbursement {int(year)}' and trashed = false "
-             "and mimeType = 'application/vnd.google-apps.spreadsheet'")
+        # Drive's full-text name search does not reliably find files that were only shared with
+        # the service account, so list the folder's spreadsheets and match the name here.
         folder = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+        q = "trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'"
         if folder:
             q += f" and '{folder}' in parents"
         from urllib.parse import quote
-        res = self._call("GET", f"{DRIVE}?q={quote(q)}&supportsAllDrives=true&includeItemsFromAllDrives=true"
-                                f"&fields=files(id)")
-        files = res.get("files", [])
+        want = f"master disbursement {int(year)}"
+        files, token = [], ""
+        for _ in range(10):                       # at most 1000 files
+            res = self._call("GET", f"{DRIVE}?q={quote(q)}&supportsAllDrives=true&includeItemsFromAllDrives=true"
+                                    f"&pageSize=100&fields=nextPageToken,files(id,name)"
+                                    + (f"&pageToken={quote(token)}" if token else ""))
+            files += [f for f in res.get("files", []) if want in " ".join(f.get("name", "").lower().split())]
+            token = res.get("nextPageToken") or ""
+            if files or not token:
+                break
         if not files:
             return None
         sid = files[0]["id"]
