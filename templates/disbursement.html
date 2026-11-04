@@ -15,6 +15,9 @@
       {% if b.closed %}
       <form method="post" action="{{ url_for('disbursement_reopen', bid=b.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Kholne ki wajah" required maxlength="500" aria-label="Reopen reason"><button class="btn small light">Reopen</button></form>
       {% else %}
+      {% if current_user.role == 'Admin' and not s.disbursed_amount %}
+      <form method="post" action="{{ url_for('disbursement_delete', bid=b.id) }}" class="row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input name="reason" placeholder="Delete ki wajah" required maxlength="500" aria-label="Delete reason"><button class="btn small danger" data-confirm="Sheet {{ b.number }} delete karein? Is ki saari applications dobara 'Ready for Disbursement' ho jayengi aur cheques cancel ho jayenge. Record audit log mein rahe ga.">{{ icon('trash') }} Delete sheet</button></form>
+      {% endif %}
       <form method="post" action="{{ url_for('disbursement_close', bid=b.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small navy" data-confirm="Sheet close karne ke baad is mein koi tabdeeli nahi ho sakti (Admin wajah likh kar dobara khol sakta hai). Close karein?">{{ icon('check') }} Close sheet</button></form>
       {% endif %}
     {% endif %}

@@ -75,6 +75,9 @@ lm.session_protection = "strong"   # a session cookie copied to another browser/
 
 # Brute-force protection: after this many wrong passwords within the window, login is blocked.
 LOGIN_MAX_FAILS = int(os.getenv("LOGIN_MAX_FAILS", "5"))
+# Short passwords are allowed so staff can log in easily; the lock above (5 wrong tries)
+# is what stops guessing.
+MIN_PASSWORD_LEN = int(os.getenv("MIN_PASSWORD_LEN", "5"))
 LOGIN_WINDOW = timedelta(minutes=int(os.getenv("LOGIN_LOCK_MINUTES", "15")))
 
 # ---------------------------------------------------------------- roles, permissions, workflow
@@ -193,6 +196,7 @@ ACTION_LABELS = {
     "disbursement.disbursed": "Raqam ada (disbursed) mark ki",
     "disbursement.closed": "Disbursement sheet close ki",
     "disbursement.reopened": "Disbursement sheet dobara kholi",
+    "disbursement.deleted": "Disbursement sheet delete ki",
     "cheque.saved": "Cheque number likha",
     "cheque.status": "Cheque status badla",
     "cheque.cancelled": "Cheque cancel kiya",
@@ -416,6 +420,9 @@ class DisbursementBatch(db.Model):
     reopened_by = db.Column(db.Integer, db.ForeignKey("user.id"))
     reopened_at = db.Column(db.DateTime)
     reopen_reason = db.Column(db.Text)
+    deleted_at = db.Column(db.DateTime)
+    deleted_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    delete_reason = db.Column(db.Text)
 
     @property
     def closed(self):
@@ -780,7 +787,7 @@ def inject_globals():
             "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS,
             "PHOTO_SLOTS": PHOTO_SLOTS, "PHOTO_LABELS": PHOTO_LABELS, "can": can,
             "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES, "PORTAL_INFO": PORTAL_INFO,
-            "CNIC_GROUPS": CNIC_GROUPS, "CNIC_LABELS": CNIC_LABELS, "money": money,
+            "CNIC_GROUPS": CNIC_GROUPS, "MIN_PASSWORD_LEN": MIN_PASSWORD_LEN, "CNIC_LABELS": CNIC_LABELS, "money": money,
             "portal": PORTAL_INFO.get(role), "portal_key": SECTION_OF_ROLE.get(role),
             "nav": nav_items(role) if role else []}
 
@@ -879,8 +886,8 @@ def change_password():
     if request.method == "POST":
         if not current_user.check_password(request.form.get("current", "")):
             flash("Purana password ghalat hai.")
-        elif len(request.form.get("new", "")) < 8:
-            flash("Naya password kam az kam 8 characters ka ho.")
+        elif len(request.form.get("new", "")) < MIN_PASSWORD_LEN:
+            flash(f"Naya password kam az kam {MIN_PASSWORD_LEN} characters ka ho.")
         elif request.form.get("new") != request.form.get("confirm"):
             flash("Dono naye password match nahi karte.")
         else:
@@ -1482,8 +1489,8 @@ def users():
         password = request.form.get("password", "")
         role = request.form.get("role", "Staff")
         full_name = request.form.get("full_name", "").strip()[:120] or None
-        if role not in ROLES or not username or len(password) < 8:
-            flash("Username aur kam az kam 8 character password zaroori hai.")
+        if role not in ROLES or not username or len(password) < MIN_PASSWORD_LEN:
+            flash(f"Username aur kam az kam {MIN_PASSWORD_LEN} character password zaroori hai.")
         elif User.query.filter_by(username=username).first():
             flash("Ye username pehle se mojood hai.")
         else:
@@ -1539,8 +1546,8 @@ def toggle_user(uid):
 def reset_password(uid):
     u = db.get_or_404(User, uid)
     p = request.form.get("password", "")
-    if len(p) < 8:
-        flash("Password kam az kam 8 characters ka ho.")
+    if len(p) < MIN_PASSWORD_LEN:
+        flash(f"Password kam az kam {MIN_PASSWORD_LEN} characters ka ho.")
     else:
         u.set_password(p)
         audit("user.password_reset", entity="user", entity_id=u.id)
@@ -1891,7 +1898,8 @@ def disbursement_list():
               new={"number": number, "date": when.isoformat()})
         db.session.commit()
         return redirect(url_for("disbursement_sheet", bid=b.id))
-    batches = DisbursementBatch.query.order_by(DisbursementBatch.disb_date.desc(), DisbursementBatch.number.desc()).all()
+    batches = (DisbursementBatch.query.filter(DisbursementBatch.deleted_at.is_(None))
+               .order_by(DisbursementBatch.disb_date.desc(), DisbursementBatch.number.desc()).all())
     summary = {b.id: (len(active_entries(b)), sum(int(e.amount or 0) for e in active_entries(b))) for b in batches}
     last = db.session.query(db.func.max(DisbursementBatch.number)).scalar()
     return render_template("disbursement_list.html", batches=batches, summary=summary,
@@ -1902,13 +1910,20 @@ def disbursement_list():
 @app.route("/disbursement/<int:bid>")
 @requires_sheet_access
 def disbursement_sheet(bid):
-    b = db.get_or_404(DisbursementBatch, bid)
+    b = live_batch(bid)
     gy = db.session.get(GsheetYear, b.year)
     history = {r["entry"].id: Cheque.query.filter_by(entry_id=r["entry"].id).order_by(Cheque.id).all()
                for r in sheet_data(b)["rows"]}
     return render_template("disbursement.html", s=sheet_data(b), b=b, history=history,
                            eligible=eligible_for_sheet() if can("disbursement.manage") and not b.closed else [],
                            gsheet=gy if gy and gy.status == "ready" else None, names=usernames())
+
+
+def live_batch(bid):
+    b = db.get_or_404(DisbursementBatch, bid)
+    if b.deleted_at:
+        abort(404)
+    return b
 
 
 def _batch_open_or_back(b):
@@ -1921,7 +1936,7 @@ def _batch_open_or_back(b):
 @app.route("/disbursement/<int:bid>/add", methods=["POST"])
 @requires("disbursement.manage")
 def disbursement_add(bid):
-    b = db.get_or_404(DisbursementBatch, bid)
+    b = live_batch(bid)
     if (r := _batch_open_or_back(b)):
         return r
     eligible = {a.id: a for a in eligible_for_sheet()}
@@ -2020,7 +2035,7 @@ def disbursement_mark(eid):
 @app.route("/disbursement/<int:bid>/disburse-all", methods=["POST"])
 @requires("disbursement.manage")
 def disbursement_mark_all(bid):
-    b = db.get_or_404(DisbursementBatch, bid)
+    b = live_batch(bid)
     if (r := _batch_open_or_back(b)):
         return r
     n = sum(_mark_disbursed(e, b) for e in active_entries(b))
@@ -2097,7 +2112,7 @@ def save_cheque(eid):
 @app.route("/disbursement/<int:bid>/close", methods=["POST"])
 @requires("period.close")
 def disbursement_close(bid):
-    b = db.get_or_404(DisbursementBatch, bid)
+    b = live_batch(bid)
     if not b.closed:
         b.status, b.closed_by, b.closed_at = "closed", current_user.id, datetime.utcnow()
         audit("disbursement.closed", entity="disbursement_batch", entity_id=b.id, new={"number": b.number})
@@ -2109,7 +2124,7 @@ def disbursement_close(bid):
 @app.route("/disbursement/<int:bid>/reopen", methods=["POST"])
 @requires("period.close")
 def disbursement_reopen(bid):
-    b = db.get_or_404(DisbursementBatch, bid)
+    b = live_batch(bid)
     reason = request.form.get("reason", "").strip()
     if b.closed:
         if not reason:
@@ -2121,6 +2136,46 @@ def disbursement_reopen(bid):
         db.session.commit()
         flash(f"Sheet {b.number} dobara khul gayi.")
     return redirect(url_for("disbursement_sheet", bid=b.id))
+
+
+@app.route("/disbursement/<int:bid>/delete", methods=["POST"])
+@login_required
+def disbursement_delete(bid):
+    """Admin only. The sheet is hidden (soft delete); its rows are taken off so the
+    applications go back to "Ready for Disbursement"; paid sheets can never be deleted."""
+    if current_user.role != "Admin":
+        abort(403)
+    b = live_batch(bid)
+    back = redirect(url_for("disbursement_sheet", bid=b.id))
+    reason = request.form.get("reason", "").strip()
+    if b.closed:
+        flash("Close sheet delete nahi ho sakti. Pehle wajah likh kar dobara kholein.")
+        return back
+    if not reason:
+        flash("Sheet delete karne ki wajah likhna zaroori hai.")
+        return back
+    rows = active_entries(b)
+    if any(e.disbursed_at for e in rows):
+        flash("Is sheet mein raqam ada ho chuki hai (Paid rows); ye sheet delete nahi ho sakti.")
+        return back
+    now = datetime.utcnow()
+    for e in rows:
+        for ch in Cheque.query.filter(Cheque.entry_id == e.id, Cheque.status != "Cancelled"):
+            ch.status, ch.cancel_reason = "Cancelled", "Sheet deleted: " + reason
+            ch.cancelled_by, ch.cancelled_at = current_user.id, now
+        e.removed_at, e.removed_by, e.remove_reason = now, current_user.id, "Sheet deleted: " + reason
+        a = db.session.get(Application, e.application_id)
+        if a and a.status == "Added to Disbursement Sheet":
+            a.status, a.updated_by, a.updated_at = "Ready for Disbursement", current_user.id, now
+    db.session.flush()
+    b.deleted_at, b.deleted_by, b.delete_reason = now, current_user.id, reason
+    audit("disbursement.deleted", entity="disbursement_batch", entity_id=b.id, reason=reason,
+          old={"number": b.number, "rows": len(rows)})
+    mark_dirty(b)
+    db.session.commit()
+    flash(f"Disbursement sheet {b.number} delete ho gayi. Us ki applications dobara 'Ready for Disbursement' hain.")
+    try_sync()
+    return redirect(url_for("disbursement_list"))
 
 
 @app.route("/disbursement/entry/<int:eid>/photo")
@@ -2140,7 +2195,7 @@ def disbursement_photo(eid):
 @requires_sheet_access
 def disbursement_xlsx(bid):
     from sheet_export import build_xlsx
-    b = db.get_or_404(DisbursementBatch, bid)
+    b = live_batch(bid)
     with open(os.path.join(app.static_folder, "tooba-logo.png"), "rb") as fh:
         logo = fh.read()
     data = build_xlsx(sheet_data(b, with_photos=True), logo)
@@ -2172,7 +2227,7 @@ def app_link(app_pk):
 
 def month_rows(year, month):
     rows, bold = [], []
-    batches = (DisbursementBatch.query.filter_by(year=year, month=month)
+    batches = (DisbursementBatch.query.filter_by(year=year, month=month).filter(DisbursementBatch.deleted_at.is_(None))
                .order_by(DisbursementBatch.disb_date, DisbursementBatch.number).all())
     total_n = total_amt = total_fee = 0
     for b in batches:
@@ -2204,7 +2259,7 @@ def summary_rows(year):
     tot = [0, 0, 0, 0, 0]
     purpose, fees = {}, {}
     for m in range(1, 13):
-        bs = DisbursementBatch.query.filter_by(year=year, month=m).all()
+        bs = DisbursementBatch.query.filter_by(year=year, month=m).filter(DisbursementBatch.deleted_at.is_(None)).all()
         vals = [len(bs), 0, 0, 0, 0]
         for b in bs:
             s = sheet_data(b)
@@ -2316,7 +2371,7 @@ def google_sheets():
                 db.session.add(GsheetSync(year=y, month=0, dirty=True))
                 db.session.commit()
         elif action == "resync":
-            for b in DisbursementBatch.query.all():
+            for b in DisbursementBatch.query.filter(DisbursementBatch.deleted_at.is_(None)):
                 mark_dirty(b)
             db.session.commit()
         n = run_sync(limit=30) if (gsheets.configured() or GOOGLE_CLIENT) else 0
@@ -2533,7 +2588,8 @@ with app.app_context():
         # every table the code needs; a missing one means a migration has not been applied yet
         MIGRATION_PENDING = not all(_insp.has_table(t) for t in (
             "audit_log", "role_permission", "disbursement_batch", "disbursement_entry", "cheque",
-            "gsheet_year", "gsheet_sync", "gsheet_sync_log"))
+            "gsheet_year", "gsheet_sync", "gsheet_sync_log")) or not any(
+            c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch"))
     if not MIGRATION_PENDING:
         # Local SQLite only: without ADMIN_PASSWORD a random one is generated and printed once.
         admin_pw = os.getenv("ADMIN_PASSWORD", "")

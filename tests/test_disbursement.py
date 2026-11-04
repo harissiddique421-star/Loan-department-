@@ -305,3 +305,58 @@ def test_reports(admin, staff, reviewer, appm):
         data = appm.report_data(2026)
         appm.db.session.remove()
     assert data["totals"]["fees"] >= 1700 and any(r["name"] == "Business" for r in data["purpose"])
+
+
+def test_admin_can_delete_open_sheet(admin, staff, reviewer, appm, monkeypatch):
+    fake = FakeGoogle()
+    monkeypatch.setattr(appm, "GOOGLE_CLIENT", fake)
+    pk = new_app(staff, name="Delete Me", cnic="4210177700001")
+    approve(admin, staff, reviewer, pk, "DEL-1")
+    bid, number = new_batch(admin, date="2026-11-21")
+    admin.post(f"/disbursement/{bid}/add", data={"app_id": [pk]})
+    e = entry_of(appm, pk)
+    reviewer.post(f"/disbursement/entry/{e}/cheque", data={"cheque_no": "DEL-CHQ-1", "status": "Issued"})
+    assert any("Delete Me" in row for row in fake.writes[("sheet2026", "November")])
+    # only Admin, and only with a reason
+    assert reviewer.post(f"/disbursement/{bid}/delete", data={"reason": "x"}).status_code == 403
+    admin.post(f"/disbursement/{bid}/delete", data={"reason": ""})
+    assert entry_of(appm, pk) == e
+    admin.post(f"/disbursement/{bid}/delete", data={"reason": "Test sheet by mistake"})
+    with appm.app.app_context():
+        b = appm.db.session.get(appm.DisbursementBatch, bid)
+        assert b.deleted_at and b.delete_reason == "Test sheet by mistake"
+        assert appm.Cheque.query.filter_by(entry_id=e).one().status == "Cancelled"
+        assert appm.AuditLog.query.filter_by(action="disbursement.deleted", entity_id=bid).count() == 1
+    assert entry_of(appm, pk) is None and get_row(pk).status == "Ready for Disbursement"
+    assert admin.get(f"/disbursement/{bid}").status_code == 404
+    assert f">{number}<" not in text_of(admin.get("/disbursement"))
+    assert not any("Delete Me" in row for row in fake.writes[("sheet2026", "November")])
+    # the application can go on a new sheet, and the cheque number can be used again
+    bid2, _ = new_batch(admin, date="2026-11-22")
+    admin.post(f"/disbursement/{bid2}/add", data={"app_id": [pk]})
+    assert get_row(pk).status == "Added to Disbursement Sheet"
+    reviewer.post(f"/disbursement/entry/{entry_of(appm, pk)}/cheque", data={"cheque_no": "DEL-CHQ-1", "status": "Issued"})
+    with appm.app.app_context():
+        assert appm.Cheque.query.filter_by(cheque_no="DEL-CHQ-1", status="Issued").count() == 1
+
+
+def test_paid_or_closed_sheet_cannot_be_deleted(admin, staff, reviewer, appm):
+    pk = new_app(staff, name="Paid Keep", cnic="4210177700002")
+    approve(admin, staff, reviewer, pk, "DEL-2")
+    bid, _ = new_batch(admin, date="2026-11-23")
+    admin.post(f"/disbursement/{bid}/add", data={"app_id": [pk]})
+    admin.post(f"/disbursement/entry/{entry_of(appm, pk)}/disbursed")
+    r = admin.post(f"/disbursement/{bid}/delete", data={"reason": "try"}, follow_redirects=True)
+    assert "delete nahi ho sakti" in text_of(r)
+    admin.post(f"/disbursement/{bid}/close")
+    r = admin.post(f"/disbursement/{bid}/delete", data={"reason": "try"}, follow_redirects=True)
+    assert "delete nahi ho sakti" in text_of(r)
+    with appm.app.app_context():
+        assert appm.db.session.get(appm.DisbursementBatch, bid).deleted_at is None
+
+
+def test_database_refuses_deleting_closed_sheet(pg, admin, appm):
+    bid, _ = new_batch(admin, date="2026-11-24")
+    admin.post(f"/disbursement/{bid}/close")
+    with pytest.raises(Exception, match="Only an open sheet"):
+        pg.execute("update disbursement_batch set deleted_at = now(), delete_reason = 'x' where id = %s", (bid,))
