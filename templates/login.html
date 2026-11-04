@@ -1,6 +1,8 @@
 {% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}{{ info.login }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='login.css') }}">
+<script src="{{ url_for('static', filename='login.js') }}" defer></script>{% endblock %}
 {% block page %}
-<div class="auth">
+<div class="auth auth-login">
 {% include "_auth_side.html" %}
   <main class="auth-main">
     <form class="auth-card portal-{{ portal_key }}" method="post" action="{{ url_for('login_portal', portal=portal_key) }}">
@@ -9,11 +11,24 @@
       <span class="section-tag">{{ info.title }}</span>
       <h1>{{ info.login }}</h1>
       <p class="sub">{{ info.blurb }}</p>
-      <label for="username">Username</label>
-      <div class="field-icon">{{ icon('user') }}<input id="username" name="username" autocomplete="username" required autofocus></div>
-      <label for="password">Password</label>
-      <div class="pw field-icon">{{ icon('key') }}<input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" data-toggle-pw="password" aria-label="Password dikhayein">{{ icon('eye') }}</button></div>
-      <button class="btn" type="submit">Login {{ icon('arrow') }}</button>
+      <div class="login-field" style="--i:1">
+        <label for="username">Username</label>
+        <div class="field-icon">{{ icon('user') }}<input id="username" name="username" autocomplete="username" required autofocus></div>
+      </div>
+      <div class="login-field" style="--i:2">
+        <label for="password">Password</label>
+        <div class="pw field-icon">{{ icon('key') }}<input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" data-toggle-pw="password" aria-label="Password dikhayein">{{ icon('eye') }}</button></div>
+      </div>
+      <div class="login-dock" id="loginDock" style="--i:3">
+        <svg class="dock-band" viewBox="0 0 400 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+          <path class="dock-band-line" d="M20 50 Q200 0 380 50"/>
+        </svg>
+        <span class="dock-socket" aria-hidden="true"></span>
+        <button type="submit" class="login-cta" id="loginBtn">
+          <span class="login-btn-text">Login</span>
+          <span class="login-btn-arrow" aria-hidden="true">{{ icon('arrow') }}</span>
+        </button>
+      </div>
       <a class="switch" href="{{ url_for('login') }}">{{ icon('back') }} Doosra section chunein</a>
     </form>
   </main>

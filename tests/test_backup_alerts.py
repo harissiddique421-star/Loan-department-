@@ -91,3 +91,12 @@ def test_alerts_off_without_settings(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     assert appmod.alerts.configured() is False
     assert appmod.alerts.send("x", "y") is False
+
+
+def test_dashboard_activity_is_short(admin, staff):
+    for i in range(3):
+        new_app(staff, name=f"Activity {i}", cnic=f"42101999000{i:02d}")
+    page = admin.get("/admin").get_data(as_text=True)
+    head, _, rest = page.partition('<details class="more">')
+    assert "Sab dekhein (" in rest and head.count("<li><span><b>") <= 4 + 8   # 4 activities (+ queue rows)
+    assert rest.split("</details>")[0].count("<li><span><b>") >= 1
