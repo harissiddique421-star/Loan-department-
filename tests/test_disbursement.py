@@ -232,7 +232,7 @@ def test_excel_export(admin, staff, reviewer, appm):
 # ------------------------------------------------------------------ Google Sheets (fake client)
 class FakeGoogle:
     def __init__(self, fail=False):
-        self.created, self.writes, self.fail = [], {}, fail
+        self.created, self.writes, self.grids, self.fail = [], {}, {}, fail
 
     def find_year(self, year):
         return None
@@ -243,10 +243,11 @@ class FakeGoogle:
         self.created.append(year)
         return f"sheet{year}", f"https://docs.google.com/spreadsheets/d/sheet{year}", {"November": 11, "Yearly Summary": 99}
 
-    def write_tab(self, sid, tab, sheet_id, rows, bold_rows=()):
+    def write_layout(self, sid, tab, sheet_id, grid):
         if self.fail:
             raise RuntimeError("Google is down")
-        self.writes[(sid, tab)] = rows
+        self.writes[(sid, tab)] = grid.values()
+        self.grids[(sid, tab)] = grid
 
 
 def test_google_sync(admin, staff, reviewer, appm, monkeypatch):
@@ -385,3 +386,43 @@ def test_admin_can_undo_paid_then_delete(admin, staff, reviewer, appm):
     assert get_row(pk).status == "Ready for Disbursement"
     with appm.app.app_context():
         assert appm.db.session.get(appm.DisbursementBatch, bid).deleted_at
+
+
+def test_google_sheet_looks_like_printed_sheet(admin, staff, reviewer, appm, monkeypatch):
+    fake = FakeGoogle()
+    monkeypatch.setattr(appm, "GOOGLE_CLIENT", fake)
+    monkeypatch.setenv("APP_BASE_URL", "https://tooba.example")
+    pk = new_app(staff, name="=HYPERLINK(\"http://evil\")", cnic="4210177700009")
+    approve(admin, staff, reviewer, pk, "GS-1")
+    bid, number = new_batch(admin, date="2026-12-05")
+    admin.post(f"/disbursement/{bid}/add", data={"app_id": [pk]})
+    grid = fake.grids[("sheet2026", "December")]
+    vals = grid.values()
+    flat = [str(v) for row in vals for v in row]
+    for text in ("THE TOOBA FOUNDATION", "& Community Center", "S.No", "Cheque No.", "Form Fees",
+                 "Disbursement Report", "Fee Collection", "Number of Loan", "President",
+                 "General Secretary", "Enquiry Officer", "Total Amount"):
+        assert text in flat, text
+    assert any(v.startswith("Disbursement Number ") for v in flat)
+    reqs = grid.requests(7)
+    cells = [c for rq in reqs if "updateCells" in rq and "rows" in rq["updateCells"]
+             for row in rq["updateCells"]["rows"] for c in row["values"]]
+    formulas = [c["userEnteredValue"]["formulaValue"] for c in cells if "formulaValue" in c.get("userEnteredValue", {})]
+    assert any(f.startswith('=IMAGE("https://tooba.example/static/tooba-logo.png"') for f in formulas)
+    photo = [f for f in formulas if "/gs/photo/" in f]
+    assert len(photo) == 1
+    # applicant text is never a formula
+    assert {"stringValue": "=HYPERLINK(\"http://evil\")"} in [c.get("userEnteredValue") for c in cells]
+    assert not any("evil" in f for f in formulas)
+    assert any("mergeCells" in rq for rq in reqs) and any(
+        rq.get("updateSheetProperties", {}).get("properties", {}).get("gridProperties", {}).get("hideGridlines")
+        for rq in reqs)
+    # the photo link works without a login, only with the right key, only while on a live sheet
+    url = photo[0].split('"')[1].replace("https://tooba.example", "")
+    c = appm.app.test_client()
+    r = c.get(url)
+    assert r.status_code in (200, 302)
+    assert c.get(url[:-4] + "0000").status_code == 404
+    e = entry_of(appm, pk)
+    admin.post(f"/disbursement/entry/{e}/remove", data={"reason": "test"})
+    assert c.get(url).status_code == 404

@@ -132,6 +132,13 @@ class GoogleClient:
             tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
         return sid, info.get("spreadsheetUrl"), tabs
 
+    def write_layout(self, spreadsheet_id, tab, sheet_id, grid):
+        """Replace one tab with a sheet_layout.Grid (values, formats, merges, sizes) in one call."""
+        if sheet_id is None:
+            info = self._call("GET", f"{SHEETS}/{spreadsheet_id}?fields=sheets.properties")
+            sheet_id = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}[tab]
+        self._call("POST", f"{SHEETS}/{spreadsheet_id}:batchUpdate", json={"requests": grid.requests(sheet_id)})
+
     def write_tab(self, spreadsheet_id, tab, sheet_id, rows, bold_rows=()):
         """Replace everything on one tab with `rows` (list of lists of plain values)."""
         rng = f"'{tab}'!A1:Z3000"
