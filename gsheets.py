@@ -94,8 +94,11 @@ class GoogleClient:
         return sid, info.get("spreadsheetUrl", f"https://docs.google.com/spreadsheets/d/{sid}"), tabs
 
     def find_year(self, year):
-        """An existing file with the year's title in the folder (protects against duplicates)."""
-        q = f"name = '{title_for(year)}' and trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'"
+        """An existing spreadsheet for the year — found by "Master Disbursement <year>" in its name,
+        so a file the Admin created by hand (needed with a plain Gmail account, where a service
+        account cannot own files) is used too. Missing month / summary tabs are added."""
+        q = (f"name contains 'Master Disbursement {int(year)}' and trashed = false "
+             "and mimeType = 'application/vnd.google-apps.spreadsheet'")
         folder = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         if folder:
             q += f" and '{folder}' in parents"
@@ -108,6 +111,12 @@ class GoogleClient:
         sid = files[0]["id"]
         info = self._call("GET", f"{SHEETS}/{sid}?fields=sheets.properties,spreadsheetUrl")
         tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
+        missing = [t for t in MONTHS + [SUMMARY] if t not in tabs]
+        if missing:
+            self._call("POST", f"{SHEETS}/{sid}:batchUpdate",
+                       json={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]})
+            info = self._call("GET", f"{SHEETS}/{sid}?fields=sheets.properties,spreadsheetUrl")
+            tabs = {s["properties"]["title"]: s["properties"]["sheetId"] for s in info["sheets"]}
         return sid, info.get("spreadsheetUrl"), tabs
 
     def write_tab(self, spreadsheet_id, tab, sheet_id, rows, bold_rows=()):
