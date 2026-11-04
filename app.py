@@ -2032,6 +2032,37 @@ def disbursement_mark(eid):
     return redirect(url_for("disbursement_sheet", bid=b.id))
 
 
+@app.route("/disbursement/entry/<int:eid>/undo-paid", methods=["POST"])
+@requires("disbursement.manage")
+def disbursement_unmark(eid):
+    """Admin only: undo a "Paid" mark made by mistake (reason required, kept in the audit log)."""
+    if current_user.role != "Admin":
+        abort(403)
+    e, b = _entry(eid)
+    if (r := _batch_open_or_back(b)):
+        return r
+    back = redirect(url_for("disbursement_sheet", bid=b.id))
+    reason = request.form.get("reason", "").strip()
+    if not reason:
+        flash("Paid hatane ki wajah likhna zaroori hai.")
+        return back
+    if not e.disbursed_at:
+        return back
+    old_at = e.disbursed_at
+    e.disbursed_at, e.disbursed_by = None, None
+    a = db.session.get(Application, e.application_id)
+    old = a.status
+    if a.status == "Disbursed":
+        a.status, a.updated_by, a.updated_at = "Added to Disbursement Sheet", current_user.id, datetime.utcnow()
+    audit("disbursement.undo_paid", a, reason=reason, entity="disbursement_entry", entity_id=e.id,
+          old={"status": old, "disbursed_at": old_at.isoformat()}, new={"status": a.status, "sheet": b.number})
+    mark_dirty(b)
+    db.session.commit()
+    flash("Paid mark hata diya gaya.")
+    try_sync()
+    return back
+
+
 @app.route("/disbursement/<int:bid>/disburse-all", methods=["POST"])
 @requires("disbursement.manage")
 def disbursement_mark_all(bid):
