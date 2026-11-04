@@ -43,3 +43,24 @@ def test_complete_sheet_is_left_alone():
     c = Recorder({t: i for i, t in enumerate(gsheets.MONTHS + [gsheets.SUMMARY])})
     c.find_year(2027)
     assert not any(u.endswith(":batchUpdate") for _, u, _ in c.calls)
+
+
+def test_service_account_can_see_shared_files(monkeypatch):
+    """drive.file would hide files the app did not create, such as the hand-made yearly sheet."""
+    import json
+    captured = {}
+
+    class FakeCreds:
+        @staticmethod
+        def from_service_account_info(info, scopes):
+            captured["scopes"] = scopes
+            return object()
+
+    import google.oauth2.service_account as sa
+    import google.auth.transport.requests as tr
+    monkeypatch.setattr(sa, "Credentials", FakeCreds)
+    monkeypatch.setattr(tr, "AuthorizedSession", lambda creds: "session")
+    monkeypatch.setenv("GOOGLE_SERVICE_ACCOUNT_JSON", json.dumps({"type": "service_account"}))
+    assert gsheets.GoogleClient()._authed() == "session"
+    assert "https://www.googleapis.com/auth/drive" in captured["scopes"]
+    assert "https://www.googleapis.com/auth/drive.file" not in captured["scopes"]
