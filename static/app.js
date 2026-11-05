@@ -77,3 +77,20 @@
     });
   });
 })();
+
+/* Stop accidental double submits (double click, impatient second click) on normal forms.
+   Forms that send with JavaScript (they call preventDefault) are not touched. The button
+   is usable again after a few seconds, e.g. when the "submit" only started a download. */
+(function () {
+  'use strict';
+  document.addEventListener('submit', function (e) {
+    var form = e.target;
+    if (e.defaultPrevented || !form || form.hasAttribute('data-allow-resubmit')) return;
+    if (form.dataset.busy === '1') { e.preventDefault(); return; }
+    form.dataset.busy = '1';
+    setTimeout(function () { delete form.dataset.busy; }, 4000);
+  });
+  window.addEventListener('pageshow', function () {
+    document.querySelectorAll('form[data-busy]').forEach(function (f) { delete f.dataset.busy; });
+  });
+})();

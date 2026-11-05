@@ -7,7 +7,7 @@ from flask import (Flask, render_template, request, redirect, url_for, flash, ab
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
-from sqlalchemy import inspect, text, event, or_
+from sqlalchemy import inspect, text, event, or_, func, select as sa_select, column as sa_column
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,6 +18,7 @@ import gsheets
 import alerts
 import backup
 import sheet_layout
+from cache import VersionedCache
 
 app = Flask(__name__)
 
@@ -750,8 +751,47 @@ def parse_amount(v):
     return int(digits) if digits else None
 
 
+READ_CACHE = VersionedCache(ttl=int(os.getenv("READ_CACHE_TTL", "300")))
+
+
+def data_version():
+    """Database "has anything changed?" stamp, read once per request (see cache.py)."""
+    if not PERF_DB or not has_request_context():
+        return None
+    if "_data_version" not in g:
+        g._data_version = db.session.execute(text("select public.data_version()")).scalar()
+    return g._data_version
+
+
+@event.listens_for(Session, "after_commit")
+def _forget_version(session):
+    # after this request changes something, later reads in the same request use the new data
+    if has_request_context():
+        g.pop("_data_version", None)
+
+
+def viewer_key():
+    """Who is looking: results that RLS filters per user are cached per role and user."""
+    return (current_user.role, current_user.id) if current_user and current_user.is_authenticated else ("anon", 0)
+
+
+def cached(name, compute, *parts, per_user=True):
+    key = (name,) + (viewer_key() if per_user else ()) + parts
+    return READ_CACHE.get(key, data_version(), compute)
+
+
 def usernames():
-    return {u.id: u.display for u in User.query.all()}
+    # user names are readable by every signed-in role (user_select policy is "true")
+    if "_usernames" not in g:
+        g._usernames = cached("usernames", lambda: {u.id: u.display for u in User.query.all()}, per_user=False)
+    return g._usernames
+
+
+def status_counts(base):
+    """{status: count} for a query, in one GROUP BY instead of one COUNT per status."""
+    rows = base.with_entities(Application.status, func.count()).group_by(Application.status).order_by(None).all()
+    got = dict(rows)
+    return {st: got.get(st, 0) for st in STATUSES}, sum(got.values())
 
 
 @app.template_filter("slug")
@@ -797,6 +837,7 @@ def inject_globals():
 
 
 MIGRATION_PENDING = False
+PERF_DB = False            # set at startup when the performance migration is applied
 
 
 @app.before_request
@@ -925,6 +966,12 @@ def search(query, q):
         return query
     like = f"%{q}%"
     digits = "".join(ch for ch in q if ch.isdigit())
+    if PERF_DB:
+        # same matching as below, found with the trigram indexes (RLS still checks every row)
+        ids = sa_select(sa_column("id")).select_from(
+            text("public.search_application_ids(:sq, :sd) as found(id)").bindparams(
+                sq=q, sd=digits if digits and digits != q else None))
+        return query.filter(Application.id.in_(ids))
     conds = [Application.applicant_name.ilike(like), Application.app_id.ilike(like),
              Application.loan_number.ilike(like), Application.cnic.ilike(like)]
     if digits and digits != q:
@@ -932,17 +979,23 @@ def search(query, q):
     return query.filter(or_(*conds))
 
 
+LIST_PAGE_SIZE = 200
+
+
 def list_page(base, title, eyebrow, endpoint, **extra):
     q = request.args.get("q", "").strip()
     status = request.args.get("status", "").strip()
-    counts = {s: base.filter(Application.status == s).count() for s in STATUSES}
-    total = base.count()
+    page = max(1, request.args.get("page", 1, type=int) or 1)
+    counts, total = cached("list_counts", lambda: status_counts(base), endpoint, extra.get("scope", ""))
     query = search(base, q)
     if status:
         query = query.filter(Application.status == status)
-    apps = query.order_by(Application.updated_at.desc()).limit(200).all()
+    rows = (query.order_by(Application.updated_at.desc())
+            .offset((page - 1) * LIST_PAGE_SIZE).limit(LIST_PAGE_SIZE + 1).all())
+    apps, has_next = rows[:LIST_PAGE_SIZE], len(rows) > LIST_PAGE_SIZE
     return render_template("applications.html", apps=apps, total=total, counts=counts, q=q, status=status,
                            names=usernames(), title=title, eyebrow=eyebrow, list_endpoint=endpoint,
+                           page=page, has_next=has_next,
                            extra_args={k: v for k, v in extra.items() if k.startswith("arg_")}, **extra)
 
 
@@ -955,14 +1008,19 @@ def live(query):
 @login_required
 def admin_dashboard():
     base = live(Application.query)
-    counts = {s: base.filter(Application.status == s).count() for s in STATUSES}
+
+    def numbers():
+        counts, total = status_counts(base)
+        by_role = dict(db.session.query(User.role, func.count()).filter(User.active.is_(True))
+                       .group_by(User.role).all())
+        return counts, total, {r: by_role.get(r, 0) for r in ROLES}
+    counts, total, users_by_role = cached("admin_dashboard", numbers)
     queue = (base.filter(or_(Application.status.in_(["Submitted", "Submitted Again"]),
                              (Application.status == "Pending Review") & Application.reviewer_id.is_(None)))
              .order_by(Application.updated_at.desc()).limit(20).all())
-    users_by_role = {r: User.query.filter(User.role == r, User.active.is_(True)).count() for r in ROLES}
     recent_audit = AuditLog.query.order_by(AuditLog.id.desc()).limit(12).all()
     recent = base.order_by(Application.updated_at.desc()).limit(8).all()
-    return render_template("admin_dashboard.html", counts=counts, total=base.count(), queue=queue,
+    return render_template("admin_dashboard.html", counts=counts, total=total, queue=queue,
                            users_by_role=users_by_role, recent_audit=recent_audit, recent=recent,
                            names=usernames())
 
@@ -986,10 +1044,11 @@ def reviewer_dashboard():
     waiting = (base.filter(Application.status.in_(["Submitted", "Pending Review", "Submitted Again"]))
                .order_by(Application.updated_at).all())
     in_review = base.filter(Application.status == "In Review").order_by(Application.updated_at).all()
-    stats = {"assigned": base.count(), "waiting": len(waiting), "in_review": len(in_review),
-             "correction": base.filter(Application.status == "Correction Required").count(),
+    by_status, assigned = status_counts(base)
+    stats = {"assigned": assigned, "waiting": len(waiting), "in_review": len(in_review),
+             "correction": by_status["Correction Required"],
              "approved": base.filter(Application.approved_by == current_user.id).count(),
-             "rejected": base.filter(Application.status == "Rejected").count()}
+             "rejected": by_status["Rejected"]}
     return render_template("reviewer_dashboard.html", waiting=waiting, in_review=in_review, stats=stats,
                            names=usernames())
 
@@ -1011,18 +1070,21 @@ def my_apps():
 def staff_dashboard():
     base = my_apps()
     corrections = base.filter(Application.status == "Correction Required").order_by(Application.updated_at).all()
-    open_notes = {}
-    for a in corrections:
-        n = (ReviewNote.query.filter_by(application_id=a.id, kind="correction", resolved_at=None)
-             .order_by(ReviewNote.id.desc()).first())
-        open_notes[a.id] = n.body if n else ""
+    open_notes = {a.id: "" for a in corrections}
+    if corrections:
+        # newest open correction note per application (one query instead of one per application)
+        for n in (ReviewNote.query.filter(ReviewNote.application_id.in_(list(open_notes)),
+                                          ReviewNote.kind == "correction", ReviewNote.resolved_at.is_(None))
+                  .order_by(ReviewNote.id)):
+            open_notes[n.application_id] = n.body
     drafts = base.filter(Application.status == "Draft").order_by(Application.updated_at.desc()).all()
     progress = ["Submitted", "Pending Review", "In Review", "Submitted Again"]
     done = ["Approved", "Ready for Disbursement", "Added to Disbursement Sheet", "Disbursed", "Completed"]
-    stats = {"total": base.count(), "drafts": len(drafts), "corrections": len(corrections),
-             "progress": base.filter(Application.status.in_(progress)).count(),
-             "approved": base.filter(Application.status.in_(done)).count(),
-             "rejected": base.filter(Application.status == "Rejected").count()}
+    by_status, total = status_counts(base)
+    stats = {"total": total, "drafts": len(drafts), "corrections": len(corrections),
+             "progress": sum(by_status[x] for x in progress),
+             "approved": sum(by_status[x] for x in done),
+             "rejected": by_status["Rejected"]}
     recent = base.order_by(Application.updated_at.desc()).limit(10).all()
     return render_template("staff_dashboard.html", corrections=corrections, open_notes=open_notes,
                            drafts=drafts, stats=stats, recent=recent, names=usernames())
@@ -1843,8 +1905,11 @@ def active_cheque(entry_id):
 def sheet_data(batch, with_photos=False):
     """Everything a disbursement sheet shows — used for the page, Excel and Google Sheets."""
     rows, fee_map, purpose_map = [], {}, {}
-    for i, e in enumerate(active_entries(batch), 1):
-        ch = active_cheque(e.id)
+    entries = active_entries(batch)
+    live_cheques = {c.entry_id: c for c in Cheque.query.filter(
+        Cheque.entry_id.in_([e.id for e in entries] or [-1]), Cheque.status != "Cancelled")}
+    for i, e in enumerate(entries, 1):
+        ch = live_cheques.get(e.id)
         amount = int(e.amount or 0)
         fee = int(e.fee_amount or 0)
         row = {"sno": i, "entry": e, "name": e.name, "cnic": fmt_cnic(e.cnic), "phone": e.phone or "",
@@ -1876,6 +1941,13 @@ def sheet_data(batch, with_photos=False):
             "disbursed_amount": sum(r["amount"] for r in rows if r["disbursed"]),
             "fee_table": sorted(fee_map.values(), key=lambda x: -x["fee"]),
             "purpose_table": sorted(purpose_map.values(), key=lambda x: (order.get(x["name"], 999), x["name"]))}
+
+
+def eligible_count():
+    """How many applications are waiting for a sheet (same rule as eligible_for_sheet)."""
+    taken = sa_select(DisbursementEntry.application_id).where(DisbursementEntry.removed_at.is_(None))
+    return (live(Application.query).filter(Application.status.in_(["Approved", "Ready for Disbursement"]),
+                                           Application.id.not_in(taken)).count())
 
 
 def eligible_for_sheet():
@@ -1910,11 +1982,15 @@ def disbursement_list():
         return redirect(url_for("disbursement_sheet", bid=b.id))
     batches = (DisbursementBatch.query.filter(DisbursementBatch.deleted_at.is_(None))
                .order_by(DisbursementBatch.disb_date.desc(), DisbursementBatch.number.desc()).all())
-    summary = {b.id: (len(active_entries(b)), sum(int(e.amount or 0) for e in active_entries(b))) for b in batches}
+    sums = dict((bid, (n, int(total or 0))) for bid, n, total in db.session.query(
+        DisbursementEntry.batch_id, func.count(), func.sum(DisbursementEntry.amount))
+        .filter(DisbursementEntry.removed_at.is_(None), DisbursementEntry.batch_id.in_([b.id for b in batches] or [-1]))
+        .group_by(DisbursementEntry.batch_id))
+    summary = {b.id: sums.get(b.id, (0, 0)) for b in batches}
     last = db.session.query(db.func.max(DisbursementBatch.number)).scalar()
     return render_template("disbursement_list.html", batches=batches, summary=summary,
                            next_number=(last + 1) if last else "", today=datetime.utcnow().date().isoformat(),
-                           ready=len(eligible_for_sheet()) if can("disbursement.manage") else 0)
+                           ready=eligible_count() if can("disbursement.manage") else 0)
 
 
 @app.route("/disbursement/<int:bid>")
@@ -1922,9 +1998,11 @@ def disbursement_list():
 def disbursement_sheet(bid):
     b = live_batch(bid)
     gy = db.session.get(GsheetYear, b.year)
-    history = {r["entry"].id: Cheque.query.filter_by(entry_id=r["entry"].id).order_by(Cheque.id).all()
-               for r in sheet_data(b)["rows"]}
-    return render_template("disbursement.html", s=sheet_data(b), b=b, history=history,
+    s = sheet_data(b)
+    history = {r["entry"].id: [] for r in s["rows"]}
+    for c in Cheque.query.filter(Cheque.entry_id.in_(list(history) or [-1])).order_by(Cheque.id):
+        history[c.entry_id].append(c)
+    return render_template("disbursement.html", s=s, b=b, history=history,
                            eligible=eligible_for_sheet() if can("disbursement.manage") and not b.closed else [],
                            gsheet=gy if gy and gy.status == "ready" else None, names=usernames())
 
@@ -2613,26 +2691,50 @@ def export_xlsx():
 
 # ---------------------------------------------------------------- reports
 def report_data(year):
-    apps = live(Application.query).all()
+    return cached("report_data", lambda: _report_data(year), int(year))
+
+
+def _report_data(year):
+    # plain rows with just the columns used below (attribute access is the same as on objects)
+    apps = live(Application.query).with_entities(
+        Application.id, Application.created_at, Application.approved_at, Application.loan_amount,
+        Application.status, Application.created_by, Application.reviewer_id, Application.purpose_label).all()
     names = usernames()
     entries = (db.session.query(DisbursementEntry, DisbursementBatch)
                .join(DisbursementBatch, DisbursementBatch.id == DisbursementEntry.batch_id)
                .filter(DisbursementEntry.removed_at.is_(None)).all())
     rejected_at = {}
-    for h in AuditLog.query.filter_by(action="application.status").all():
+    for h in (AuditLog.query.filter_by(action="application.status")
+              .with_entities(AuditLog.application_id, AuditLog.new_value, AuditLog.created_at)
+              .order_by(AuditLog.id).all()):
         if (h.new_value or {}).get("status") == "Rejected":
             rejected_at[h.application_id] = h.created_at
     amt = lambda a: int(a.loan_amount or 0)
+    # one pass over the applications instead of four per month (same numbers)
+    created_c, approved_c, approved_amt, rejected_c, created_y, approved_y = ({} for _ in range(6))
+    for a in apps:
+        if a.created_at is not None:
+            k = (a.created_at.year, a.created_at.month)
+            created_c[k] = created_c.get(k, 0) + 1
+            created_y[k[0]] = created_y.get(k[0], 0) + 1
+        if a.approved_at is not None:
+            k = (a.approved_at.year, a.approved_at.month)
+            approved_c[k] = approved_c.get(k, 0) + 1
+            approved_amt[k] = approved_amt.get(k, 0) + amt(a)
+            approved_y[k[0]] = approved_y.get(k[0], 0) + 1
+        d = rejected_at.get(a.id)
+        if d is not None:
+            k = (d.year, d.month)
+            rejected_c[k] = rejected_c.get(k, 0) + 1
     monthly = []
     for m in range(1, 13):
-        inm = lambda d: d is not None and d.year == year and d.month == m
         ents = [e for e, b in entries if b.year == year and b.month == m]
         monthly.append({
             "month": gsheets.MONTHS[m - 1],
-            "created": sum(1 for a in apps if inm(a.created_at)),
-            "approved": sum(1 for a in apps if inm(a.approved_at)),
-            "approved_amount": sum(amt(a) for a in apps if inm(a.approved_at)),
-            "rejected": sum(1 for a in apps if inm(rejected_at.get(a.id))),
+            "created": created_c.get((year, m), 0),
+            "approved": approved_c.get((year, m), 0),
+            "approved_amount": approved_amt.get((year, m), 0),
+            "rejected": rejected_c.get((year, m), 0),
             "sheet_count": len(ents),
             "disbursed": sum(1 for e in ents if e.disbursed_at),
             "disbursed_amount": sum(int(e.amount or 0) for e in ents if e.disbursed_at),
@@ -2641,8 +2743,8 @@ def report_data(year):
     yearly = []
     for y in years:
         ents = [e for e, b in entries if b.year == y]
-        yearly.append({"year": y, "created": sum(1 for a in apps if a.created_at and a.created_at.year == y),
-                       "approved": sum(1 for a in apps if a.approved_at and a.approved_at.year == y),
+        yearly.append({"year": y, "created": created_y.get(y, 0),
+                       "approved": approved_y.get(y, 0),
                        "disbursed_amount": sum(int(e.amount or 0) for e in ents if e.disbursed_at),
                        "fees": sum(int(e.fee_amount or 0) for e in ents)})
     yr = [a for a in apps if a.created_at and a.created_at.year == year]
@@ -2735,6 +2837,115 @@ def too_large(e):
                            msg="Ek waqt mein 15 MB se zyada upload nahi ho sakta."), 413
 
 
+# ---------------------------------------------------------------- static files: browser cache
+# Every url_for('static', ...) gets ?v=<file fingerprint>, so the browser may keep CSS / JS /
+# images for a year and still fetches the new file right after a deploy changes it.
+_static_versions = {}
+
+
+@app.url_defaults
+def _static_version(endpoint, values):
+    if endpoint == "static" and "filename" in values and "v" not in values:
+        fn = values["filename"]
+        if fn not in _static_versions:
+            try:
+                st = os.stat(os.path.join(app.static_folder, fn))
+                _static_versions[fn] = hashlib.sha1(f"{st.st_mtime_ns}:{st.st_size}".encode()).hexdigest()[:10]
+            except OSError:
+                _static_versions[fn] = None
+        if _static_versions[fn]:
+            values["v"] = _static_versions[fn]
+
+
+def _static_max_age(filename):
+    # fingerprinted URL: cache for a year; plain /static/... (e.g. the logo in Google Sheets): 1 hour
+    return 31536000 if has_request_context() and request.args.get("v") else 3600
+
+
+app.get_send_file_max_age = _static_max_age
+
+
+# ---------------------------------------------------------------- rate limits
+# Generous limits that a person never reaches, tight ones only on heavy downloads. Counted per
+# signed-in user (staff in one office share one internet address) or per address when signed out.
+# In-memory per server instance: Vercel runs several, so add a Vercel Firewall rate-limit rule
+# for a global limit (see PERFORMANCE.md).
+import threading as _threading
+import time as _rl_time
+
+RATE_LIMITS = {"heavy": (10, 60), "search": (120, 60), "photo": (300, 60), "any": (600, 60), "anon": (300, 60)}
+HEAVY_ENDPOINTS = {"export_csv", "export_xlsx", "backup_export", "backup_drive_now", "reports_export",
+                   "disbursement_xlsx"}
+_rl_hits, _rl_lock = {}, _threading.Lock()
+
+
+def _rate_ok(bucket, who):
+    limit, window = RATE_LIMITS[bucket]
+    now = _rl_time.monotonic()
+    key = (bucket, who)
+    with _rl_lock:
+        times = [t for t in _rl_hits.get(key, ()) if now - t < window]
+        if len(times) >= limit:
+            _rl_hits[key] = times
+            return False
+        times.append(now)
+        _rl_hits[key] = times
+        if len(_rl_hits) > 20000:                 # forget idle keys
+            for k in [k for k, v in _rl_hits.items() if not v or now - v[-1] > window][:10000]:
+                _rl_hits.pop(k, None)
+    return True
+
+
+@app.before_request
+def rate_limit():
+    if app.config.get("TESTING") or request.endpoint in (None, "static", "cron_gsheets", "cron_backup"):
+        return None
+    signed_in = current_user and current_user.is_authenticated
+    who = f"u{current_user.id}" if signed_in else f"ip{client_ip()}"
+    buckets = ["any" if signed_in else "anon"]
+    if request.endpoint in HEAVY_ENDPOINTS:
+        buckets.append("heavy")
+    elif request.endpoint == "gsheet_photo":
+        buckets.append("photo")
+    elif request.args.get("q"):
+        buckets.append("search")
+    if all(_rate_ok(b, who) for b in buckets):
+        return None
+    return render_template("message.html", title="Thora intezar karein",
+                           msg="Bohat zyada requests aa rahi hain. Ek minute baad dobara koshish karein."), 429
+
+
+# ---------------------------------------------------------------- performance timing (off by default)
+# PERF_TIMING=1 adds a Server-Timing header (database time + number of queries, total time) to
+# every response, readable in the browser's Network tab and by the load test. No data, no SQL.
+PERF_TIMING = os.getenv("PERF_TIMING") == "1"
+if PERF_TIMING:
+    import time as _time
+    from sqlalchemy.engine import Engine
+
+    @event.listens_for(Engine, "before_cursor_execute")
+    def _q_start(conn, cursor, statement, parameters, context, executemany):
+        if has_request_context():
+            g._q_t0 = _time.perf_counter()
+
+    @event.listens_for(Engine, "after_cursor_execute")
+    def _q_end(conn, cursor, statement, parameters, context, executemany):
+        if has_request_context() and "_q_t0" in g:
+            g._db_ms = g.get("_db_ms", 0.0) + (_time.perf_counter() - g._q_t0) * 1000
+            g._db_n = g.get("_db_n", 0) + 1
+
+    @app.before_request
+    def _req_start():
+        g._req_t0 = _time.perf_counter()
+
+    @app.after_request
+    def _server_timing(response):
+        total = (_time.perf_counter() - g.get("_req_t0", _time.perf_counter())) * 1000
+        response.headers["Server-Timing"] = (f'db;dur={g.get("_db_ms", 0.0):.1f};desc="{g.get("_db_n", 0)} queries", '
+                                             f"app;dur={total:.1f}")
+        return response
+
+
 @app.after_request
 def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -2799,6 +3010,12 @@ with app.app_context():
             "audit_log", "role_permission", "disbursement_batch", "disbursement_entry", "cheque",
             "gsheet_year", "gsheet_sync", "gsheet_sync_log")) or not any(
             c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch"))
+        # Performance migration (20261107…) is optional: without it the app keeps the old
+        # (slower) search and simply does not cache.
+        with db.engine.connect() as _c:
+            PERF_DB = bool(_c.execute(text(
+                "select count(*) = 2 from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+                "where n.nspname = 'public' and p.proname in ('search_application_ids', 'data_version')")).scalar())
     if not MIGRATION_PENDING:
         # Local SQLite only: without ADMIN_PASSWORD a random one is generated and printed once.
         admin_pw = os.getenv("ADMIN_PASSWORD", "")

@@ -27,6 +27,13 @@
     {% if q or status %}<a class="btn light" href="{{ url_for(list_endpoint, **base_args) }}">{{ icon('x') }} Clear</a>{% endif %}
   </form>
   {{ app_table(apps, names, 'Koi application nahi mili' if (q or status) else 'Abhi koi application nahi', 'Search ya filter badal kar dekhein.' if (q or status) else '') }}
+  {% if page > 1 or has_next %}
+  <div class="row no-print" style="justify-content:space-between;padding:12px 16px">
+    {% if page > 1 %}<a class="btn light small" href="{{ url_for(list_endpoint, q=q or None, status=status or None, page=page - 1, **base_args) }}">{{ icon('back') }} Pichla page</a>{% else %}<span></span>{% endif %}
+    <span class="muted">Page {{ page }}</span>
+    {% if has_next %}<a class="btn light small" href="{{ url_for(list_endpoint, q=q or None, status=status or None, page=page + 1, **base_args) }}">Agla page {{ icon('arrow') }}</a>{% else %}<span></span>{% endif %}
+  </div>
+  {% endif %}
 </div>
 
 {% if show_tools %}
