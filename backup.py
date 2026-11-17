@@ -1,6 +1,6 @@
 """Full database backup as gzip-compressed JSON (every table, documents included).
 
-Password hashes are left out on purpose: a leaked backup must not let anyone crack the short
+Password hashes (and the Google Drive sign-in token) are left out on purpose: a leaked backup must not let anyone crack the short
 login passwords. After a restore, the Admin sets new passwords for the users.
 """
 import base64
@@ -12,6 +12,8 @@ import json
 from sqlalchemy import select
 
 SKIP_COLUMNS = {("user", "password_hash")}
+SKIP_TABLES = {"archive_setting"}      # holds the (encrypted) Google Drive sign-in; never in a backup
+PAGE = 1000
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
@@ -34,11 +36,18 @@ def build(session, metadata, now=None):
     """Returns (gzip bytes, {table: row count})."""
     out, counts, skipped = {}, {}, []
     for table in metadata.sorted_tables:
+        if table.name in SKIP_TABLES:
+            continue
         cols = [c for c in table.columns if (table.name, c.name) not in SKIP_COLUMNS]
         try:
+            rows = []
             with session.begin_nested():       # a table the app may not read (e.g. the ID counter,
-                rows = session.execute(        # which a restore rebuilds from the IDs) is skipped
-                    select(*cols).order_by(*table.primary_key.columns)).all()
+                while True:                    # which a restore rebuilds from the IDs) is skipped
+                    page = session.execute(select(*cols).order_by(*table.primary_key.columns)
+                                           .limit(PAGE).offset(len(rows))).all()
+                    rows += page               # page by page, so no row is ever cut off
+                    if len(page) < PAGE:
+                        break
         except Exception as exc:
             if "permission denied" not in str(exc):
                 raise

@@ -1,0 +1,22 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Backup check{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin · Backup &amp; Recovery</div><h1>Backup check</h1>
+  <p>{{ filename }} · banaya gaya {{ payload.created_at }}. Live database par kuch nahi likha gaya.</p></div>
+  <a class="btn light" href="{{ url_for('backup_recovery') }}">{{ icon('back') }} Wapas</a></div>
+<section class="card rise {% if not report.ok %}warnbox{% endif %}" style="--i:1">
+  {% if report.ok %}<b class="state-on">Backup sahih hai.</b> Counts, IDs, relationships aur document checksums sab theek.
+  {% else %}<b class="state-off">Backup mein masle:</b><ul>{% for p in report.problems %}<li>{{ p }}</li>{% endfor %}</ul>{% endif %}
+</section>
+<div class="card pad-0 rise" style="--i:2"><div class="overflow"><table>
+  <thead><tr><th>Table</th><th>Backup rows</th><th>Live rows</th><th>Backup mein hain, live mein nahi</th></tr></thead>
+  <tbody>{% for t, n in report.counts|dictsort %}{% set d = diff.get(t) %}<tr><td>{{ t }}</td><td>{{ n }}</td><td>{{ d.live if d else '—' }}</td>
+    <td>{% if d and d.missing_in_live %}<span class="state-off">{{ d.missing_in_live|length }}</span> (IDs {{ d.missing_in_live[:20]|join(', ') }}{% if d.missing_in_live|length > 20 %} …{% endif %}){% elif d %}<span class="state-on">0</span>{% else %}—{% endif %}</td></tr>{% endfor %}</tbody>
+</table></div></div>
+<section class="card rise" style="--i:3"><h2>Restore kaise karein</h2>
+  <ol>
+    <li>Supabase mein ek <b>naya</b> project (ya branch) banayein aur us par <code>supabase/schema.sql</code> aur <code>supabase/migrations/</code> ki har file chalayein.</li>
+    <li><code>python restore_backup.py "{{ filename }}" "postgresql://postgres:…@…/postgres"</code> — har row asal ID ke saath, phir har table dobara count hoti hai. Target mein data ho to script ruk jata hai.</li>
+    <li>Wahan website ka ek test deployment chala kar check karein. Sab sahih ho tab hi Vercel ka <code>DATABASE_URL</code> badlein. Users ke naye password Admin set kare (backup mein password nahi hote).</li>
+  </ol>
+</section>
+{% endblock %}
