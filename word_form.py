@@ -58,6 +58,7 @@ FIELDS = [
     ("houseEdu", 1, "line", (726, 1011, 894, 1055), 28),
     ("relative1", 1, "line", (633, 1088, 1013, 1132), 30),
     ("relative2", 1, "line", (89, 1088, 458, 1132), 30),
+    ("language", 1, "line", (290, 1011, 592, 1055), 28),
     ("g1name", 1, "line", (657, 1194, 1111, 1238), 30),
     ("g1father", 1, "line", (92, 1194, 567, 1238), 30),
     ("g1phone", 1, "line", (96, 1264, 313, 1308), 28),
@@ -85,6 +86,16 @@ CNICS = [
 IMAGES = [("photo", 1, (539, 314, 724, 519)), ("g1Photo", 2, (138, 855, 274, 1016)),
           ("g2Photo", 2, (138, 1079, 274, 1240))]
 LINE_GAP = 5
+# Printed label + underline that the scanned page lacks (same as LABELS / RULES in loanform.js)
+LABELS = [(1, "زبان :", (598, 1003, 676, 1055), 25)]
+RULES = [(1, (290, 1055, 592, 1058))]
+
+
+def printed_value(values, fid):
+    """What goes on the form for a field: Language shows the typed language when "Other" was picked."""
+    if fid == "language" and values.get("language") == "Other":
+        return values.get("languageOther") or "Other"
+    return values.get(fid, "")
 
 NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
       'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
@@ -155,6 +166,16 @@ def _textbox(text, size_pt, align="center", valign="ctr", bold=True, color="1111
                 f'</w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr rot="0" vert="horz" wrap="none" lIns="0" '
                 f'tIns="0" rIns="0" bIns="0" anchor="{valign}" anchorCtr="0"><a:noAutofit/></wps:bodyPr>'
                 f'</wps:wsp></a:graphicData></a:graphic>')
+    return g
+
+
+def _filled_rect(color="111111"):
+    def g(sid, cx, cy):
+        return (f'<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+                f'<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/>'
+                f'</a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+                f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill><a:ln><a:noFill/></a:ln></wps:spPr>'
+                f'<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic>')
     return g
 
 
@@ -262,9 +283,18 @@ def build(record):
         p = b.page_paragraph(first=(n == 1))
         with open(os.path.join(FORM_DIR, f"page{n}.png"), "rb") as fh:
             b.image(p, fh.read(), (0, 0, FORM_W, FORM_H), behind=True)
+        for page, rect in RULES:
+            if page == n:
+                b.anchor(p, _anchor_xml(b.ids, *rect, _filled_rect(), name="Rule"))
+        for page, text, (x0, y0, x1, y1), fs in LABELS:
+            if page == n:
+                b.anchor(p, _anchor_xml(b.ids, x0, y0, x1, y1 - LINE_GAP,
+                                        _textbox(text, fs * PT_PER_PX, align="right", valign="b", bold=False),
+                                        name="Label"))
         for fid, page, kind, rect, fs in FIELDS:
-            if page == n and values.get(fid):
-                b.text(p, values[fid], rect, fs, kind)
+            text = printed_value(values, fid)
+            if page == n and text:
+                b.text(p, text, rect, fs, kind)
         if n == 1:
             for fid, (y0, y1), fs, edges in CNICS:
                 digits = re.sub(r"\D", "", values.get(fid, ""))[:13]
