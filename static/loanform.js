@@ -31,6 +31,8 @@ const FIELDS = [
   { id: 'houseEdu',        type: 'line', r: [726, 1011, 894, 1055], fs: 28 },
   { id: 'relative1',       type: 'line', r: [633, 1088, 1013, 1132], fs: 30 },
   { id: 'relative2',       type: 'line', r: [89, 1088, 458, 1132],  fs: 30 },
+  // Language: the scanned page has no spot for it, so its label and underline are drawn too (LABELS)
+  { id: 'language',        type: 'line', r: [290, 1011, 592, 1055], fs: 28 },
   // Page 1 — Guarantor 1
   { id: 'g1name',          type: 'line', r: [657, 1194, 1111, 1238], fs: 30 },
   { id: 'g1father',        type: 'line', r: [92, 1194, 567, 1238],   fs: 30 },
@@ -49,6 +51,15 @@ const FIELDS = [
   { id: 'detail3', page: 3, type: 'box', r: [62, 1482, 1186, 1577], fs: 34 },
   { id: 'detail4', page: 3, type: 'box', r: [62, 1580, 1186, 1666], fs: 34 },
 ];
+
+/* Printed text and underlines that are not on the scanned page (drawn on screen, print and PDF). */
+const LABELS = [
+  { page: 1, text: 'زبان :', r: [598, 1003, 676, 1055], fs: 25 },
+];
+const RULES = [
+  { page: 1, r: [290, 1055, 592, 1058] },
+];
+const URDU_FONT = "'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', serif";
 
 /* CNIC boxes: 15 cells (cells 5 and 13 are the printed dashes). */
 const DIGIT_CELLS = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14];
@@ -81,6 +92,12 @@ const imgData = {};     // id -> loaded HTMLImageElement
 const pending = {};     // id -> Blob waiting to be uploaded
 for (let p = 1; p <= PAGE_COUNT; p++) previews[p] = document.getElementById('preview' + p);
 
+/* What is printed for a field. Language prints the typed language when "Other" was picked. */
+function shown(id) {
+  if (id === 'language' && val('language') === 'Other') return val('languageOther') || 'Other';
+  return val(id);
+}
+
 function val(id) {
   const el = form && form.elements[id];
   if (el) return String(el.value || '').trim();
@@ -107,6 +124,23 @@ function buildOverlay() {
     previews[f.page || 1].appendChild(el);
     fieldEls[f.id] = el;
   });
+  LABELS.forEach(l => {
+    const el = document.createElement('div');
+    el.className = 'field line lbl';
+    place(el, ...l.r);
+    el.style.fontSize = cqw(l.fs);
+    el.style.fontFamily = URDU_FONT;
+    el.style.fontWeight = '400';
+    el.dir = 'rtl';
+    el.textContent = l.text;
+    previews[l.page].appendChild(el);
+  });
+  RULES.forEach(r => {
+    const el = document.createElement('div');
+    el.className = 'rule';
+    place(el, ...r.r);
+    previews[r.page].appendChild(el);
+  });
   CNICS.forEach(c => {
     c.els = DIGIT_CELLS.map(ci => {
       const d = document.createElement('div');
@@ -131,7 +165,7 @@ function buildOverlay() {
 
 function setField(f) {
   const el = fieldEls[f.id];
-  const text = val(f.id);
+  const text = shown(f.id);
   el.innerHTML = '';
   if (!text) return;
   const span = document.createElement('span');
@@ -226,9 +260,15 @@ function renderPage(p, SCALE) {
     ctx.drawImage(im, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x0, y0, bw, bh);
   });
   ctx.fillStyle = '#111';
+  RULES.filter(r => r.page === p).forEach(r => ctx.fillRect(r.r[0], r.r[1], r.r[2] - r.r[0], r.r[3] - r.r[1]));
+  LABELS.filter(l => l.page === p).forEach(l => {
+    ctx.font = '400 ' + l.fs + 'px ' + URDU_FONT;
+    ctx.direction = 'rtl'; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(l.text, l.r[2], l.r[3] - LINE_GAP - l.fs * 0.2);
+  });
   ctx.textAlign = 'center';
   FIELDS.filter(f => (f.page || 1) === p).forEach(f => {
-    const text = val(f.id);
+    const text = shown(f.id);
     if (!text) return;
     const [x0, y0, x1, y1] = f.r;
     let size = f.fs;
@@ -373,6 +413,7 @@ if (form) {
   form.querySelectorAll('.grid select[data-other]').forEach(sel => {
     sel.addEventListener('change', () => {
       toggleOther(sel);
+      updatePreview();
       if (sel.value === 'Other') document.getElementById(sel.getAttribute('data-other')).focus();
     });
   });
