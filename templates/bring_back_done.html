@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Nateeja{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin · Backup se wapas laayen</div><h1>Nateeja</h1>
+  <p>Backup: {{ label }}</p></div>
+  <a class="btn light" href="{{ url_for('bring_back_page') }}">{{ icon('back') }} Wapas</a></div>
+<section class="card rise" style="--i:1">
+  <ul class="mini">{% for r in results %}<li><span>{% if r.ok %}<a href="{{ url_for('view_application', app_id=r.id) }}"><b>{{ r.app_id }}</b></a>{% else %}<b>{{ r.app_id }}</b>{% endif %} {{ r.name }}
+    <span class="sub {{ 'state-on' if r.ok else 'state-off' }}">{{ r.message }}</span></span></li>{% endfor %}</ul>
+</section>
+{% endblock %}

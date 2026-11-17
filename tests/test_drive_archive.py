@@ -67,6 +67,9 @@ class FakeDrive:
         return [self._meta(f) for f in self.files.values()
                 if not f["folder"] and not f.get("trashed") and (f.get("props") or {}).get("tooba") == "1"]
 
+    def download(self, file_id):
+        return self.files[file_id]["data"]
+
     def rename(self, file_id, name):
         self.files[file_id]["name"] = name
         return {"id": file_id, "name": name}
@@ -408,3 +411,81 @@ def test_old_folder_layout_is_tidied_without_losing_files(staff, drive):
         assert not drive.files[old["Daily Backups"]].get("trashed")
         rep2 = appmod.verify_archive()
         assert rep2["missing"] == [] and rep2["corrupt"] == []
+
+
+def _purge(pk):
+    """Simulate an application that is gone from the live database (hard delete, as the owner)."""
+    import conftest
+    if conftest.PG:
+        with conftest.pg_admin(conftest.DBNAME) as c:
+            c.execute("set session_replication_role = replica")     # the history is append-only
+            for t in ("review_note", "document", "disbursement_entry", "audit_log"):
+                c.execute(f"delete from {t} where application_id = %s", (pk,))
+            c.execute("delete from application where id = %s", (pk,))
+    else:
+        with appmod.app.app_context():
+            for m in (appmod.ReviewNote, appmod.Document, appmod.AuditLog):
+                m.query.filter_by(application_id=pk).delete()
+            appmod.Application.query.filter_by(id=pk).delete()
+            appmod.db.session.commit()
+
+
+def test_bring_back_applications_from_a_drive_backup(admin, staff, drive):
+    lost = new_app(staff, name="Lost Person", cnic="4210188888888", father="Ahmed Ali")
+    gone = new_app(staff, name="Deleted Person", cnic="4210199999999", complete=False)
+    kept = new_app(staff, name="Kept Person", cnic="4210100000001", complete=False)
+    with appmod.app.app_context():
+        before = appmod.db.session.get(appmod.Application, lost)
+        lost_form, lost_code = before.form_values, before.app_id
+        lost_docs = {d.id: d.sha256 for d in appmod.Document.query.filter_by(application_id=lost)}
+    assert len(lost_docs) == 6
+    admin.post(f"/application/{lost}/note", data={"body": "Ghar ka visit ho gaya", "kind": "note"})
+    assert admin.post("/admin/backup-recovery/run", data={"action": "backup"}).status_code == 302
+    # after the backup: one application is lost completely, one is deleted in the portal, one is edited
+    _purge(lost)
+    assert admin.post(f"/application/{gone}/delete", data={"reason": "test"}).status_code == 302
+    staff.post(f"/application/{kept}/form", data={"name": "Kept Person", "cnic": "4210100000001", "amount": "77000"})
+    assert staff.get("/admin/backup-recovery/bring-back").status_code in (302, 403)
+
+    page = admin.get("/admin/backup-recovery/bring-back").get_data(as_text=True)
+    with appmod.app.app_context():
+        bid = appmod.backup_choices()[0]["id"]
+    assert f'value="{bid}"' in page
+    page = admin.get(f"/admin/backup-recovery/bring-back?backup={bid}&q=lost").get_data(as_text=True)
+    assert "Lost Person" in page and "Website par nahi" in page and "Kept Person" not in page
+    page = admin.get(f"/admin/backup-recovery/bring-back?backup={bid}&q=4210188888888").get_data(as_text=True)
+    assert "Lost Person" in page
+    # first a confirmation page; nothing has changed yet
+    r = admin.post("/admin/backup-recovery/bring-back", data={"backup": bid, "app": [lost]})
+    assert r.status_code == 200 and "Haan, wapas laayen" in r.get_data(as_text=True)
+    with appmod.app.app_context():
+        assert appmod.db.session.get(appmod.Application, lost) is None
+    r = admin.post("/admin/backup-recovery/bring-back", data={"backup": bid, "app": [lost], "confirm": "yes"})
+    assert r.status_code == 200 and "Wapas aa gayi" in r.get_data(as_text=True)
+    with appmod.app.app_context():
+        a = appmod.db.session.get(appmod.Application, lost)
+        assert a.app_id == lost_code and a.form_values == lost_form and a.deleted_at is None
+        docs = {d.id: d.sha256 for d in appmod.Document.query.filter_by(application_id=lost)}
+        assert docs == lost_docs
+        for d in appmod.Document.query.filter_by(application_id=lost):
+            assert hashlib.sha256(appmod.read_file(d)).hexdigest() == d.sha256
+        assert appmod.AuditLog.query.filter_by(application_id=lost, action="application.restored_from_backup").count() == 1
+        hist = appmod.AuditLog.query.filter_by(application_id=lost).all()
+        assert any(h.action == "application.note" and h.actor_name == "admin" for h in hist)   # original authors kept
+        notes = appmod.ReviewNote.query.filter_by(application_id=lost).all()
+        assert len(notes) == 1 and "Ghar ka visit ho gaya" in notes[0].body and "admin" in notes[0].body
+    # "all": the portal-deleted one comes back; the edited live one is never touched
+    r = admin.post("/admin/backup-recovery/bring-back", data={"backup": bid, "all": "1", "confirm": "yes"})
+    assert r.status_code == 200
+    with appmod.app.app_context():
+        assert appmod.db.session.get(appmod.Application, gone).deleted_at is None
+        assert appmod.db.session.get(appmod.Application, kept).form_values.get("amount") == "77000"
+    # a backup file that changed in Drive is refused
+    with appmod.app.app_context():
+        f = appmod.db.session.get(appmod.ArchiveFile, bid)
+        drive.files[f.drive_file_id]["data"] = b"changed"
+    import glob, tempfile
+    for p in glob.glob(os.path.join(tempfile.gettempdir(), "tooba-backup-*")):
+        os.remove(p)
+    page = admin.get(f"/admin/backup-recovery/bring-back?backup={bid}").get_data(as_text=True)
+    assert "checksum" in page
