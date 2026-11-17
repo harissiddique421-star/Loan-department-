@@ -19,6 +19,20 @@
     {% set parts = title.split(' — ') %}
     <div class="sec">{{ parts[0] }}{% if parts|length > 1 %} <small>— {{ parts[1] }}</small>{% endif %}</div>
     {% for name, label, kind in fields %}
+    {% if kind == 'select' %}
+    <div><label for="{{ name }}">{{ label }}</label>
+      <select id="{{ name }}" name="{{ name }}"{% for other, parent in OTHER_OF.items() if parent == name %} data-other="{{ other }}"{% endfor %}>
+        <option value="">— Select —</option>
+        {% for opt in SELECT_OPTIONS[name] %}<option value="{{ opt }}"{% if v.get(name) == opt %} selected{% endif %}>{{ opt }}</option>{% endfor %}
+      </select>
+      {% for other, parent in OTHER_OF.items() if parent == name %}
+      <div class="other-wrap" id="wrap_{{ other }}"{% if v.get(name) != 'Other' %} hidden{% endif %}>
+        <label for="{{ other }}">{{ FIELD_LABELS[other] }}</label>
+        <input id="{{ other }}" name="{{ other }}" value="{{ v.get(other, '') }}" autocomplete="off" dir="auto" maxlength="100" placeholder="Type language">
+      </div>
+      {% endfor %}
+    </div>
+    {% elif kind != 'other' %}
     <div {% if kind == 'row' %}class="full"{% endif %}><label for="{{ name }}">{{ label }}</label>
       <input id="{{ name }}" name="{{ name }}" value="{{ v.get(name, '') }}" autocomplete="off"
         {% if kind in ('num', 'phone', 'cnic') %}inputmode="numeric"{% endif %}
@@ -27,6 +41,7 @@
         {% if kind == 'row' %}dir="auto"{% endif %}
         {% if name == 'name' %}required{% endif %}>
     </div>
+    {% endif %}
     {% endfor %}
     {% if loop.index == 3 %}
     {% for page, slot_title, slot_note in [(1, 'Applicant Photo', 'Page 1'), (2, 'Guarantor Photos (ضمانتی کی تصویر)', 'Page 2 · signature & thumb are put by hand after printing')] %}

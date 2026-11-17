@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, PHOTO_KINDS,
-                         PHOTO_LABELS)
+                         PHOTO_LABELS, SELECT_OPTIONS, OTHER_OF)
 import gsheets
 import alerts
 import backup
@@ -829,6 +829,7 @@ def inject_globals():
     role = current_user.role if current_user and current_user.is_authenticated else None
     return {"STATUSES": STATUSES, "USING_SQLITE": USING_SQLITE, "ON_VERCEL": ON_VERCEL,
             "FORM_SECTIONS": FORM_SECTIONS, "FIELD_LABELS": FIELD_LABELS,
+            "SELECT_OPTIONS": SELECT_OPTIONS, "OTHER_OF": OTHER_OF,
             "PHOTO_SLOTS": PHOTO_SLOTS, "PHOTO_LABELS": PHOTO_LABELS, "can": can,
             "ACTION_LABELS": ACTION_LABELS, "ROLES": ROLES, "PORTAL_INFO": PORTAL_INFO,
             "CNIC_GROUPS": CNIC_GROUPS, "MIN_PASSWORD_LEN": MIN_PASSWORD_LEN, "CNIC_LABELS": CNIC_LABELS, "money": money,
@@ -1276,6 +1277,12 @@ def loan_form(app_id):
             values[name] = request.form.get(name, "").strip()
     for name in ("cnic", "g1cnic", "g2cnic"):
         values[name] = "".join(ch for ch in values.get(name, "") if ch.isdigit())[:13]
+    for name, opts in SELECT_OPTIONS.items():          # dropdowns: keep only a listed choice
+        if values.get(name) and values[name] not in opts:
+            values[name] = ""
+    for other, parent in OTHER_OF.items():             # typed value only counts when "Other" is picked
+        if values.get(parent) != "Other":
+            values[other] = ""
     if not values.get("name"):
         return fail("Applicant ka naam (Name) zaroori hai.")
     cnic = values.get("cnic", "")
