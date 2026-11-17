@@ -60,20 +60,19 @@ Admin → **Backup & Recovery**. Supabase stays the main record; the archive onl
 **What goes to Drive** (folder `Tooba Loan Department – Complete Archive`, created automatically):
 | Folder | Contents |
 |---|---|
-| Individual Applicant Forms | `<Application ID> - <Name>.docx`: the current filled form. Each update replaces the content and Drive keeps every earlier content as a revision (kept forever). |
-| Updated Application Versions | `<Application ID>/<Application ID> - v003 - <date time> - <Name>.docx`: every saved state as its own file, never overwritten. |
-| Guarantor Records | `<Application ID> - Guarantors - <Name>.docx`: both guarantors, their photos and CNIC pictures. |
-| Supporting Documents | `<Application ID>/<doc id> - <kind> - <file name>`: every uploaded photo, CNIC and document, byte for byte (replaced and deleted ones too). |
-| Complete Database Backup | `Tooba Database - latest.json.gz / - CSV.zip / .xlsx`, refreshed nightly (revisions kept). |
-| Daily Backups | `<date>/`: JSON (every table, every document, original IDs), CSV per table, Excel workbook. |
-| Weekly Backups | `<year>-W<week>/Tooba Full Archive ….zip`: the database backup in all formats + a manifest of every archived file. |
-| Backup Reports | the verification reports. |
+| Applicants/`<Application ID> - <Name>`/ | One folder per applicant. `<Application ID> - <Name>.docx` is the current filled form: each update replaces the content and Drive keeps every earlier content as a revision (kept forever). `<Application ID> - Guarantors - <Name>.docx` holds both guarantors with photos and CNIC pictures. |
+| …/Documents/ | `<doc id> - <kind> - <file name>`: every uploaded photo, CNIC and document, byte for byte (replaced and deleted ones too). |
+| …/Old Versions/ | `<Application ID> - v003 - <date time> - <Name>.docx`: every saved state as its own file, never overwritten. |
+| Daily Backups/`<date>`/ | JSON (every table, every document, original IDs), CSV per table, Excel workbook, `Tooba Word Forms <date>.zip` (the filled Word form of every applicant) and that day's verification reports. |
+| Weekly Backups/`<year>-W<week>`/ | `Tooba Full Archive ….zip`: the database in all formats, all Word forms and a manifest of every archived file. |
+
+Backup copies (versions, documents, daily/weekly files, reports) are uploaded read-only in Drive, so opening one cannot change it. An archive made with the older 8-folder layout is moved into this layout automatically on the next run: files are only moved, the old duplicate `latest` database copies and the emptied old folders go to Drive's bin (recoverable for 30 days).
 
 The Word file (`word_form.py`) is the original 3 scanned pages with every value placed exactly where the website prints it (same coordinates as `static/loanform.js`; keep the two in step), the photos, the CNIC DOCUMENTS page, then a "Complete record" section: every field, loan details, status, review notes, disbursement and cheques, the list of documents with SHA-256, and the full change history. Each file is re-opened and checked before upload, and after upload the Drive md5 must equal the local one, or it counts as failed.
 
 **When it runs**
 - Right after every save, status change, upload, note, assignment or delete (as the system, after the response is ready; a Drive problem never breaks the page).
-- `/cron/archive` (04:13 Pakistan time): anything not yet archived or that failed (retry), then verification of every archived file against Drive (missing, changed, duplicates, database vs Drive counts), with a report in Backup Reports and an alert email if anything needs attention.
+- `/cron/archive` (04:13 Pakistan time): anything not yet archived or that failed (retry), then verification of every archived file against Drive (missing, changed, duplicates, database vs Drive counts), with a report in that day's Daily Backups folder and an alert email if anything needs attention.
 - `/cron/backup` (02:43): the existing weekday file, plus the dated daily backup; on Sundays (or if a week was missed) the weekly full archive.
 - What still needs archiving is worked out from the data (a fingerprint of the application's version, status, last audit row, last document and last note), so nothing is skipped even if a request crashed after saving.
 - `ARCHIVE_TIME_BUDGET` (default 45 s) limits one cron run; what is left is done by the next run or *Backup Now*. `ARCHIVE_INLINE=0` turns off the archive-after-save step (the cron still runs).
