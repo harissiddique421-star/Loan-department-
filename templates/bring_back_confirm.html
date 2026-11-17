@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Pakka karein{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin · Backup se wapas laayen</div><h1>Pakka karein</h1>
+  <p>Backup: {{ label }}</p></div></div>
+<section class="card rise" style="--i:1">
+  <h2>Ye {{ apps|length }} application{{ 's' if apps|length != 1 }} wapas aayengi</h2>
+  <ul class="mini">{% for a in apps %}<li><span><b>{{ a.app_id }}</b> {{ a.name }}<span class="sub">
+    {% if a.state == 'deleted' %}Deleted list se wapas aayegi (data pehle hi website par hai)
+    {% else %}Backup se wapas: form, {{ a.documents }} photos/documents, {{ a.notes }} notes, {{ a.history }} history entries{% if a.disbursement %} · {{ a.disbursement }} disbursement entries wapas nahi aayengi{% endif %}{% endif %}</span></span></li>{% endfor %}</ul>
+  <p style="margin-top:12px"><b>Website par jo data pehle se hai wo nahi badlega.</b> Har wapsi history (audit log) mein likhi jayegi.</p>
+  <form method="post" action="{{ url_for('bring_back_run') }}" class="row" style="gap:8px;margin-top:12px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="backup" value="{{ bid }}">
+    <input type="hidden" name="confirm" value="yes">
+    {% for a in apps %}<input type="hidden" name="app" value="{{ a.id }}">{% endfor %}
+    <button class="btn small">{{ icon('check') }} Haan, wapas laayen</button>
+    <a class="btn small light" href="{{ url_for('bring_back_page', backup=bid) }}">Nahi, wapas jayein</a>
+  </form>
+</section>
+{% endblock %}

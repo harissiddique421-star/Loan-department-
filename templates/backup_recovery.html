@@ -55,7 +55,9 @@
 
 <section class="card rise" style="--i:4">
   <div class="card-head"><h2>{{ icon('refresh') }} Restore Backup</h2></div>
-  <p>Drive se koi backup file (<code>.json.gz</code> ya weekly <code>.zip</code>) yahan check karein. Ye sirf <b>check</b> karta hai — file sahih hai ya nahi, aur live database mein kaun se records nahi hain. Live data par kabhi kuch nahi likha jata.</p>
+  <p><a class="btn small" href="{{ url_for('bring_back_page') }}">{{ icon('back') }} Backup se application wapas laayen</a></p>
+  <p class="muted">Kisi bhi din ke Drive backup se, naam / CNIC / ID se search kar ke ek application, ya saari gum-shuda applications, website par wapas laayen. Jo website par pehle se hai wo nahi badalta.</p>
+  <p style="margin-top:14px"><b>Backup file check karein</b> (poore database ki aafat ke liye): Drive se koi backup file (<code>.json.gz</code> ya weekly <code>.zip</code>) yahan check karein. Ye sirf <b>check</b> karta hai — file sahih hai ya nahi, aur live database mein kaun se records nahi hain. Live data par kabhi kuch nahi likha jata.</p>
   <form method="post" action="{{ url_for('backup_recovery_restore') }}" enctype="multipart/form-data" class="row" style="gap:8px;flex-wrap:wrap">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="file" name="backup" accept=".gz,.json,.zip" required>

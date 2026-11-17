@@ -1,0 +1,63 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Backup se wapas laayen{% endblock %}
+{% block content %}
+<div class="page-head rise"><div><div class="eyebrow">Admin · Backup &amp; Recovery</div><h1>Backup se wapas laayen</h1>
+  <p>Google Drive ke kisi bhi din ke backup se ek application, ya saari gum-shuda applications, website par wapas laayen. Jo record website par pehle se hai use kabhi badla nahi jata.</p></div>
+  <a class="btn light" href="{{ url_for('backup_recovery') }}">{{ icon('back') }} Wapas</a></div>
+
+<section class="card rise" style="--i:1">
+  <h2>1. Kis din ka backup?</h2>
+  {% if not configured %}<p class="state-off">Google Drive connect nahi.</p>
+  {% elif not choices %}<p class="muted">Abhi Drive par koi backup nahi. Backup &amp; Recovery par "Backup Now" dabayein.</p>
+  {% else %}
+  <form method="get" class="row" style="gap:8px;flex-wrap:wrap">
+    <select name="backup" aria-label="Backup" required>
+      {% for c in choices %}<option value="{{ c.id }}" {{ 'selected' if c.id == bid }}>{{ c.when.strftime('%d %b %Y, %I:%M %p') if c.when else c.name }} · {{ 'Hafte ka archive' if c.weekly else 'Roz ka backup' }}</option>{% endfor %}
+    </select>
+    <button class="btn small">{{ icon('files') }} Kholein</button>
+  </form>
+  {% endif %}
+  {% if error %}<p class="state-off" style="margin-top:10px">{{ error }}</p>{% endif %}
+</section>
+
+{% if apps is not none %}
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>2. Application chunein</h2><span class="muted">{{ label }}</span></div>
+  <form method="get" class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <input type="hidden" name="backup" value="{{ bid }}">
+    <div class="field-icon" style="flex:1;min-width:220px">{{ icon('search') }}<input name="q" value="{{ q }}" placeholder="Naam, CNIC ya Application ID se search karein" aria-label="Search"></div>
+    <button class="btn small light">Search</button>
+    {% if q %}<a class="btn small light" href="{{ url_for('bring_back_page', backup=bid) }}">Sab dikhayein</a>{% endif %}
+  </form>
+  {% set can_back = apps|selectattr('state', 'in', ['missing', 'deleted'])|list %}
+  <p class="muted">Rang ka matlab:
+    <span class="badge s-approved">Website par maujood</span>
+    <span class="badge s-correction-required">Delete ki gayi</span>
+    <span class="badge s-rejected">Website par nahi</span></p>
+  <form method="post" action="{{ url_for('bring_back_run') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="backup" value="{{ bid }}">
+    <div class="overflow"><table>
+      <thead><tr><th></th><th>Application</th><th>Naam</th><th class="hide-sm">CNIC</th><th class="hide-sm">Status (backup mein)</th><th>Website par</th></tr></thead>
+      <tbody>
+      {% for a in apps %}<tr>
+        <td>{% if a.state in ('missing', 'deleted') %}<input type="checkbox" name="app" value="{{ a.id }}" aria-label="Chunein {{ a.app_id }}">{% endif %}</td>
+        <td><span class="appid">{{ a.app_id }}</span></td>
+        <td><b>{{ a.name or '—' }}</b><div class="muted" style="font-size:12px">{{ a.documents }} photos/documents · {{ a.notes }} notes</div></td>
+        <td class="hide-sm">{{ a.cnic }}</td>
+        <td class="hide-sm">{{ a.status }}{% if a.deleted_in_backup %} (deleted){% endif %}</td>
+        <td>{% if a.state == 'live' %}<a class="badge s-approved" href="{{ url_for('view_application', app_id=a.id) }}">Maujood hai</a>
+            {% elif a.state == 'deleted' %}<span class="badge s-correction-required">Delete ki gayi</span>
+            {% elif a.state == 'clash' %}<span class="badge s-rejected" title="Ye ID ab kisi aur application ki hai">ID kisi aur ki</span>
+            {% else %}<span class="badge s-rejected">Website par nahi</span>{% endif %}</td>
+      </tr>{% else %}<tr><td colspan="6" class="muted">Koi application nahi mili.</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn small" {% if not can_back %}disabled{% endif %}>{{ icon('back') }} Chuni hui wapas laayen</button>
+      <button class="btn small light" name="all" value="1" {% if not can_back %}disabled{% endif %}>{{ icon('back') }} Saari gum-shuda wapas laayen ({{ can_back|length }})</button>
+    </div>
+    <p class="muted" style="margin-top:8px">Agla page pehle dikhayega kya hoga; wahan "Haan" dabane par hi kuch hoga.</p>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

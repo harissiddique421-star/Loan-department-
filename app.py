@@ -1,4 +1,4 @@
-import os, json, secrets, csv, io, hashlib, hmac, zipfile
+import os, json, secrets, csv, io, hashlib, hmac, zipfile, tempfile
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
@@ -3244,6 +3244,8 @@ ARCHIVE_TRIGGERS = {"loan_form", "update_status", "upload", "save_details", "set
 
 @app.after_request
 def _archive_hook(response):
+    for pk in g.pop("_archive_after", None) or []:
+        archive_after_change(pk)
     if (request.method == "POST" and request.endpoint in ARCHIVE_TRIGGERS and response.status_code < 400
             and current_user and current_user.is_authenticated):
         pk = None
@@ -3607,6 +3609,237 @@ def backup_recovery_restore():
     audit("backup.restore_check", new={"file": secure_filename(f.filename), "ok": report["ok"]})
     db.session.commit()
     return render_template("restore_check.html", payload=payload, report=report, diff=diff, filename=f.filename)
+
+
+# ---------------------------------------------------------------- bring applications back from a Drive backup
+def backup_choices():
+    """Daily / weekly backup files in Drive that hold the whole database, newest first."""
+    rows = (ArchiveFile.query.filter(ArchiveFile.category == "database", ArchiveFile.drive_file_id.isnot(None),
+                                     ArchiveFile.status.in_(("verified", "edited")),
+                                     or_(ArchiveFile.name.like("Tooba Database %.json.gz"),
+                                         ArchiveFile.name.like("Tooba Full Archive %.zip")))
+            .order_by(ArchiveFile.id.desc()).limit(400).all())
+    seen, out = set(), []
+    for r in rows:
+        if r.name in seen or "latest" in r.name:
+            continue
+        seen.add(r.name)
+        when = (r.verified_at or r.created_at)
+        out.append({"id": r.id, "name": r.name, "when": when + PK_HOURS if when else None,
+                    "weekly": r.name.endswith(".zip")})
+    return out
+
+
+def load_drive_backup(af_id):
+    """(payload, label) of one backup file from Drive, checked against the md5 recorded at upload."""
+    r = db.session.get(ArchiveFile, af_id)
+    if r is None or r.category != "database" or not r.drive_file_id or "latest" in (r.name or ""):
+        raise ValueError("Ye backup file nahi mili.")
+    cache = os.path.join(tempfile.gettempdir(), f"tooba-backup-{r.drive_file_id}-{r.md5}")
+    data = None
+    if os.path.exists(cache):
+        with open(cache, "rb") as fh:
+            data = fh.read()
+    if data is None or (r.md5 and drive_archive.md5(data) != r.md5):
+        data = archive_client().download(r.drive_file_id)
+        if r.md5 and drive_archive.md5(data) != r.md5:
+            raise ValueError("Drive wali file badli hui hai (checksum match nahi); is backup par bharosa nahi kiya ja sakta.")
+        try:
+            with open(cache, "wb") as fh:
+                fh.write(data)
+        except OSError:
+            pass
+    return db_export.load(data), r.name
+
+
+def backup_applications(payload):
+    """Every application in a backup, with what the live database has for it."""
+    tables = payload.get("tables") or {}
+    apps = tables.get("application") or []
+    ids = [a["id"] for a in apps]
+    live = {}
+    for i in range(0, len(ids), 500):
+        for a in Application.query.filter(Application.id.in_(ids[i:i + 500])):
+            live[a.id] = a
+    live_codes = {code: i for i, code in db.session.query(Application.id, Application.app_id)}
+    per = {}
+    for t in ("document", "review_note", "audit_log", "disbursement_entry"):
+        for r in tables.get(t) or []:
+            per.setdefault(r.get("application_id"), {}).setdefault(t, 0)
+            per[r.get("application_id")][t] += 1
+    out = []
+    for a in apps:
+        form = {}
+        try:
+            form = json.loads(a.get("form_json") or "{}")
+        except ValueError:
+            pass
+        l = live.get(a["id"])
+        if l is not None:
+            state = "deleted" if l.deleted_at else "live"
+        elif live_codes.get(a.get("app_id")) not in (None, a["id"]):
+            state = "clash"
+        else:
+            state = "missing"
+        out.append({"id": a["id"], "app_id": a.get("app_id"), "name": a.get("applicant_name") or form.get("name") or "",
+                    "cnic": a.get("cnic") or form.get("cnic") or "", "status": a.get("status"),
+                    "deleted_in_backup": bool(a.get("deleted_at")), "state": state,
+                    "documents": per.get(a["id"], {}).get("document", 0),
+                    "notes": per.get(a["id"], {}).get("review_note", 0),
+                    "history": per.get(a["id"], {}).get("audit_log", 0),
+                    "disbursement": per.get(a["id"], {}).get("disbursement_entry", 0)})
+    return out
+
+
+def _restore_rows(table, rows, users, fix):
+    """Typed rows for `table`; user references that no longer exist become empty (or the admin)."""
+    cols = {c.name: c for c in table.columns}
+    user_cols = [c.name for c in table.columns
+                 if any(fk.column.table.name == "user" for fk in c.foreign_keys)]
+    out = []
+    for r in rows:
+        row = {k: db_export._typed(cols[k], v) for k, v in r.items() if k in cols}
+        for c in user_cols:
+            if row.get(c) is not None and row[c] not in users:
+                row[c] = None if cols[c].nullable else current_user.id
+        fix(row)
+        out.append(row)
+    return out
+
+
+def bring_back_application(payload, app_pk, label):
+    """Put one application from a backup back into the live database, without changing anything
+    that is already there. Returns a result dict. Never overwrites: a live application is only
+    un-deleted; rows whose IDs already exist are left alone and counted."""
+    from sqlalchemy import insert as sa_insert, update as sa_update
+    tables = payload.get("tables") or {}
+    src = next((a for a in tables.get("application") or [] if a["id"] == app_pk), None)
+    if src is None:
+        return {"id": app_pk, "ok": False, "message": "Ye application is backup mein nahi."}
+    res = {"id": app_pk, "app_id": src.get("app_id"), "name": src.get("applicant_name") or ""}
+    live = db.session.get(Application, app_pk)
+    if live is not None:
+        if live.deleted_at:
+            live.deleted_at, live.deleted_by = None, None
+            audit("application.restored", live, reason=f"Backup se wapas: {label}")
+            db.session.commit()
+            return dict(res, ok=True, message="Deleted list se wapas aa gayi (data pehle hi website par tha).")
+        return dict(res, ok=True, message="Pehle se website par maujood hai; kuch nahi badla.")
+    if Application.query.filter_by(app_id=src.get("app_id")).first():
+        return dict(res, ok=False, message=f"ID {src.get('app_id')} ab kisi aur application ki hai; wapas nahi laayi gayi.")
+    T = db.metadata.tables
+    users = {i for (i,) in db.session.query(User.id)}
+    purposes = {i for (i,) in db.session.query(T["purpose_category"].c.id)}
+    fees = {i for (i,) in db.session.query(T["fee_category"].c.id)}
+    names = {u["id"]: u.get("username") for u in tables.get("user") or []}
+
+    def fix_app(row):
+        if row.get("purpose_id") not in purposes:
+            row["purpose_id"] = None
+        if row.get("fee_category_id") not in fees:
+            row["fee_category_id"] = None
+    pg = not USING_SQLITE
+    try:
+        db.session.execute(sa_insert(T["application"]), _restore_rows(T["application"], [src], users, fix_app))
+        counts = {}
+        for t in ("document", "review_note", "audit_log"):
+            rows = [r for r in tables.get(t) or [] if r.get("application_id") == app_pk]
+            have = set()
+            ids = [r["id"] for r in rows]
+            for i in range(0, len(ids), 500):
+                have |= {x for (x,) in db.session.execute(sa_select(T[t].c.id).where(T[t].c.id.in_(ids[i:i + 500])))}
+            rows = [r for r in rows if r["id"] not in have]
+            counts[t] = (len(rows), len(have))
+            if not rows:
+                continue
+            if t == "document":
+                links = {r["id"]: r.get("replaced_by") for r in rows if r.get("replaced_by")}
+                typed = _restore_rows(T[t], rows, users, lambda row: row.update(replaced_by=None))
+                db.session.execute(sa_insert(T[t]), typed)
+                for did, to in links.items():
+                    db.session.execute(sa_update(T[t]).where(T[t].c.id == did).values(replaced_by=to))
+            elif t == "review_note":
+                def note(row, src_rows={r["id"]: r for r in rows}):
+                    orig = src_rows[row["id"]]
+                    who = names.get(orig.get("author_id")) or "?"
+                    row["body"] = f"[Backup se wapas laaya gaya · asal: {who}, {str(orig.get('created_at'))[:16]}] " \
+                                  + (row.get("body") or "")
+                    row["author_id"] = current_user.id          # the database only accepts notes by the person
+                db.session.execute(sa_insert(T[t]), _restore_rows(T[t], rows, users, note))
+            else:                                               # the history keeps its original authors
+                if pg:
+                    db.session.execute(_SET_ACTOR, {"u": "", "r": "system"})
+                db.session.execute(sa_insert(T[t]), _restore_rows(T[t], rows, users, lambda row: None))
+                if pg:
+                    db.session.execute(_SET_ACTOR, {"u": str(current_user.id), "r": current_user.role})
+        a = db.session.get(Application, app_pk)
+        skipped = len([r for r in tables.get("disbursement_entry") or [] if r.get("application_id") == app_pk])
+        audit("application.restored_from_backup", a, reason=f"Backup se wapas: {label}",
+              new={"documents": counts["document"][0], "notes": counts["review_note"][0],
+                   "history": counts["audit_log"][0], "disbursement_rows_not_restored": skipped})
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        return dict(res, ok=False, message=f"Wapas nahi aa saki: {type(exc).__name__}: {str(exc)[:200]}")
+    msg = f"Wapas aa gayi: {counts['document'][0]} photos/documents, {counts['review_note'][0]} notes, " \
+          f"{counts['audit_log'][0]} history entries."
+    clash = sum(v[1] for v in counts.values())
+    if clash:
+        msg += f" {clash} purani entries pehle se maujood thin, unhein nahi chheda."
+    if skipped:
+        msg += f" {skipped} disbursement sheet entries wapas nahi laayi gayin; zaroorat ho to sheet par dobara add karein."
+    return dict(res, ok=True, message=msg)
+
+
+@app.route("/admin/backup-recovery/bring-back")
+@requires("export", "app.restore")
+def bring_back_page():
+    if not ARCHIVE_DB:
+        return redirect(url_for("backup_recovery"))
+    choices = backup_choices()
+    bid = request.args.get("backup", type=int)
+    apps, label, error = None, None, None
+    if bid:
+        try:
+            payload, label = load_drive_backup(bid)
+            apps = backup_applications(payload)
+            q = request.args.get("q", "").strip().lower()
+            if q:
+                digits = "".join(ch for ch in q if ch.isdigit())
+                apps = [a for a in apps if q in (a["app_id"] or "").lower() or q in (a["name"] or "").lower()
+                        or (digits and digits in "".join(ch for ch in str(a["cnic"]) if ch.isdigit()))]
+        except Exception as exc:
+            db.session.rollback()
+            error = str(exc)[:300]
+    return render_template("bring_back.html", choices=choices, bid=bid, apps=apps, label=label, error=error,
+                           configured=archive_configured(), q=request.args.get("q", ""))
+
+
+@app.route("/admin/backup-recovery/bring-back", methods=["POST"])
+@requires("export", "app.restore")
+def bring_back_run():
+    bid = request.form.get("backup", type=int)
+    try:
+        payload, label = load_drive_backup(bid)
+    except Exception as exc:
+        flash(f"Backup khul nahi saka: {str(exc)[:200]}")
+        return redirect(url_for("bring_back_page"))
+    apps = {a["id"]: a for a in backup_applications(payload)}
+    if request.form.get("all") == "1":
+        chosen = [i for i, a in apps.items() if a["state"] in ("missing", "deleted")]
+    else:
+        chosen = [i for i in (request.form.getlist("app", type=int)) if i in apps]
+    chosen = [i for i in chosen if apps[i]["state"] in ("missing", "deleted")]
+    if not chosen:
+        flash("Koi application nahi chuni gayi jo wapas laani ho.")
+        return redirect(url_for("bring_back_page", backup=bid))
+    if request.form.get("confirm") != "yes":
+        return render_template("bring_back_confirm.html", bid=bid, label=label,
+                               apps=[apps[i] for i in chosen])
+    results = [bring_back_application(payload, i, label) for i in chosen]
+    done = [r for r in results if r.get("ok")]
+    g._archive_after = [r["id"] for r in done[:3]]   # into Drive after the page; the nightly run does the rest
+    return render_template("bring_back_done.html", label=label, results=results)
 
 
 @app.route("/admin/backup-recovery/google/connect")
