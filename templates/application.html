@@ -157,7 +157,7 @@
   <summary>Poora form (saari details)</summary>
   {% for title, fields in FORM_SECTIONS %}
   <h3>{{ title }}</h3>
-  <dl class="kv">{% for name, label, kind in fields %}<dt>{{ label.rstrip(' *') }}</dt><dd>{{ d.get(name) or '—' }}</dd>{% endfor %}</dl>
+  <dl class="kv">{% for name, label, kind in fields if kind != 'other' %}<dt>{{ label.rstrip(' *') }}</dt><dd>{{ d.get(name) or '—' }}{% for other, parent in OTHER_OF.items() if parent == name and d.get(name) == 'Other' and d.get(other) %} — {{ d.get(other) }}{% endfor %}</dd>{% endfor %}</dl>
   {% endfor %}
 </details>
 

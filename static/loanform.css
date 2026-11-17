@@ -10,6 +10,10 @@
 .lf input,.lf select{width:100%;padding:10px 12px;border:1px solid #d3ddd6;border-radius:10px;font-size:14.5px}
 .lf input:focus{outline:none;border-color:var(--green,#0e7a36);box-shadow:0 0 0 4px rgba(14,122,54,.14)}
 .lf .full{grid-column:1/-1}
+.lf select{background:#fff;color:inherit;font-family:inherit}
+.lf select:focus{outline:none;border-color:var(--green,#0e7a36);box-shadow:0 0 0 4px rgba(14,122,54,.14)}
+.lf .other-wrap{margin-top:10px}
+.lf .other-wrap[hidden]{display:none}
 .lf .actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px -22px -22px;position:sticky;bottom:0;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);padding:12px 22px;border-top:1px solid var(--line,#e1e8e3);border-radius:0 0 18px 18px;z-index:5}
 .lf .actions button,.lf .actions a{border:1px solid transparent;border-radius:10px;padding:10px 16px;font:700 14px var(--f-ui,system-ui);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px;transition:transform .2s,box-shadow .2s,background .2s}
 .lf .actions button:hover,.lf .actions a:hover{transform:translateY(-1px)}

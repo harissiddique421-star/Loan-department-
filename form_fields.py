@@ -5,6 +5,8 @@ static/loanform.js (FIELDS / CNICS), which says where on the scanned page the
 text is printed. Do not rename a `name` after real data has been saved.
 
 kind: text | num (digits keyboard) | phone (11 digits) | cnic (13 digits) | row (full width)
+      | select (dropdown, options in SELECT_OPTIONS)
+      | other (free text shown under the dropdown named in OTHER_OF, only when "Other" is picked)
 """
 
 FORM_SECTIONS = [
@@ -28,6 +30,8 @@ FORM_SECTIONS = [
         ("houseEdu", "Education (تعلیم)", "text"),
         ("relative1", "Nearest Masjid (قریب ترین مسجد)", "text"),
         ("relative2", "Nearest Shop (قریب ترین دکان)", "text"),
+        ("language", "Language (زبان)", "select"),
+        ("languageOther", "Other Language (دیگر زبان)", "other"),
     ]),
     ("Guarantor 1 (ضمانتی نمبر 1) — Page 1", [
         ("g1name", "Name", "text"),
@@ -52,6 +56,15 @@ FORM_SECTIONS = [
         ("detail4", "Row 4", "row"),
     ]),
 ]
+
+# Choices for "select" fields. Picking "Other" shows the matching "other" field.
+SELECT_OPTIONS = {
+    "language": ["Urdu", "English", "Sindhi", "Other"],
+}
+# "other" field -> the dropdown it belongs to
+OTHER_OF = {
+    "languageOther": "language",
+}
 
 # Pictures printed on the form: (kind, English label, Urdu label, page)
 PHOTO_SLOTS = [

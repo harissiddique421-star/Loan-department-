@@ -330,9 +330,20 @@ async function save(e) {
   btn.disabled = false;
 }
 
+/* dropdown with an "Other" choice: show the typed-value box only when Other is picked */
+function toggleOther(sel) {
+  const other = document.getElementById(sel.getAttribute('data-other'));
+  const wrap = other && document.getElementById('wrap_' + other.id);
+  if (!wrap) return;
+  const on = sel.value === 'Other';
+  wrap.hidden = !on;
+  if (!on) other.value = '';
+}
+
 function clearAll() {
   if (!window.confirm('Saari fields aur pictures khaali kar dein? (Save dabane tak purana data mehfooz hai)')) return;
   form.querySelectorAll('.grid input:not([type=file])').forEach(i => { i.value = ''; });
+  form.querySelectorAll('.grid select[data-other]').forEach(s => { s.value = ''; toggleOther(s); });
   IMAGES.forEach(m => removeImage(m.id));
   updatePreview();
 }
@@ -359,11 +370,21 @@ if (form) {
   form.querySelectorAll('input[data-photo]').forEach(inp => inp.addEventListener('change', function () {
     if (this.files[0]) loadImage(this.getAttribute('data-photo'), this.files[0]);
   }));
+  form.querySelectorAll('.grid select[data-other]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      toggleOther(sel);
+      if (sel.value === 'Other') document.getElementById(sel.getAttribute('data-other')).focus();
+    });
+  });
   const ids = [...form.querySelectorAll('.grid input:not([type=file])')];
+  const shown = el => el && !el.closest('[hidden]');
   ids.forEach((el, i) => {
     el.addEventListener('input', updatePreview);
     el.addEventListener('keydown', e => {      // Enter / Down = next field, Up = previous
-      const n = e.key === 'Enter' || e.key === 'ArrowDown' ? ids[i + 1] : e.key === 'ArrowUp' ? ids[i - 1] : null;
+      const step = e.key === 'Enter' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      let j = i + step;
+      while (step && ids[j] && !shown(ids[j])) j += step;
+      const n = step ? ids[j] : null;
       if (e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowUp') e.preventDefault();
       if (n) { n.focus(); n.select && n.select(); }
     });
