@@ -1,7 +1,29 @@
 {
   "version": 2,
-  "builds": [{"src":"app.py","use":"@vercel/python"}],
-  "routes": [{"src":"/(.*)","dest":"app.py"}],
-  "crons": [{"path": "/cron/gsheets", "schedule": "17 1 * * *"},
-            {"path": "/cron/backup", "schedule": "43 21 * * *"}]
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app.py"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/cron/gsheets",
+      "schedule": "17 1 * * *"
+    },
+    {
+      "path": "/cron/backup",
+      "schedule": "43 21 * * *"
+    },
+    {
+      "path": "/cron/archive",
+      "schedule": "13 23 * * *"
+    }
+  ]
 }

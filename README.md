@@ -54,6 +54,45 @@ Tabs are named with the year ("November 2026", "Yearly Summary 2026"; old tabs w
 - **Alert emails** to the Admin: website errors, a login lock after repeated wrong passwords, a failed nightly backup, and Google Sheets tabs that keep failing. Same alert at most every 30 minutes (backup / sheets: once a day). Off until these are set in Vercel:
   `SMTP_USER` (Gmail address that sends), `SMTP_PASSWORD` (a Gmail **App password**, not the normal one), optional `ALERT_EMAIL_TO` (comma separated; default `SMTP_USER`), `SMTP_HOST` / `SMTP_PORT` (default `smtp.gmail.com` / `465`).
 
+## Google Drive archive (Word forms + complete backups)
+Admin → **Backup & Recovery**. Supabase stays the main record; the archive only reads from it and never deletes anything in Drive.
+
+**What goes to Drive** (folder `Tooba Loan Department – Complete Archive`, created automatically):
+| Folder | Contents |
+|---|---|
+| Individual Applicant Forms | `<Application ID> - <Name>.docx`: the current filled form. Each update replaces the content and Drive keeps every earlier content as a revision (kept forever). |
+| Updated Application Versions | `<Application ID>/<Application ID> - v003 - <date time> - <Name>.docx`: every saved state as its own file, never overwritten. |
+| Guarantor Records | `<Application ID> - Guarantors - <Name>.docx`: both guarantors, their photos and CNIC pictures. |
+| Supporting Documents | `<Application ID>/<doc id> - <kind> - <file name>`: every uploaded photo, CNIC and document, byte for byte (replaced and deleted ones too). |
+| Complete Database Backup | `Tooba Database - latest.json.gz / - CSV.zip / .xlsx`, refreshed nightly (revisions kept). |
+| Daily Backups | `<date>/`: JSON (every table, every document, original IDs), CSV per table, Excel workbook. |
+| Weekly Backups | `<year>-W<week>/Tooba Full Archive ….zip`: the database backup in all formats + a manifest of every archived file. |
+| Backup Reports | the verification reports. |
+
+The Word file (`word_form.py`) is the original 3 scanned pages with every value placed exactly where the website prints it (same coordinates as `static/loanform.js`; keep the two in step), the photos, the CNIC DOCUMENTS page, then a "Complete record" section: every field, loan details, status, review notes, disbursement and cheques, the list of documents with SHA-256, and the full change history. Each file is re-opened and checked before upload, and after upload the Drive md5 must equal the local one, or it counts as failed.
+
+**When it runs**
+- Right after every save, status change, upload, note, assignment or delete (as the system, after the response is ready; a Drive problem never breaks the page).
+- `/cron/archive` (04:13 Pakistan time): anything not yet archived or that failed (retry), then verification of every archived file against Drive (missing, changed, duplicates, database vs Drive counts), with a report in Backup Reports and an alert email if anything needs attention.
+- `/cron/backup` (02:43): the existing weekday file, plus the dated daily backup; on Sundays (or if a week was missed) the weekly full archive.
+- What still needs archiving is worked out from the data (a fingerprint of the application's version, status, last audit row, last document and last note), so nothing is skipped even if a request crashed after saving.
+- `ARCHIVE_TIME_BUDGET` (default 45 s) limits one cron run; what is left is done by the next run or *Backup Now*. `ARCHIVE_INLINE=0` turns off the archive-after-save step (the cron still runs).
+
+**Setup (once)**
+1. Run `supabase/migrations/20261117000000_drive_archive.sql` (three new tables; nothing else changes).
+2. A service account has no Drive storage on a normal Gmail account, so the archive is written as the owner's Google account: in Google Cloud Console (same project as the service account) → *APIs & Services* → *OAuth consent screen*: External, add yourself, then **Publish app** (in "Testing" Google expires the sign-in after 7 days). *Credentials* → *Create OAuth client ID* → Web application, authorised redirect URI `https://tooba-foundation.vercel.app/admin/backup-recovery/google/callback`.
+3. In Vercel set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, redeploy.
+4. Admin → Backup & Recovery → **Connect Google Drive**, sign in as the account that should own the archive. The sign-in token is stored encrypted (with `SECRET_KEY`) in the database, never in the browser, and is left out of every backup. Optional `GOOGLE_ARCHIVE_PARENT_ID` puts the archive inside a given folder.
+5. Press **Backup Now** once to archive all existing applications, then **Verify All Records**.
+
+(With Google Workspace a Shared Drive works too: share it with the service account and set `GOOGLE_ARCHIVE_PARENT_ID`; no OAuth needed.)
+
+**Recovery**
+- *Restore Backup* on the page checks an uploaded backup (counts, IDs, relationships, document checksums) and lists which records the live database is missing. It never writes to live data.
+- A real restore goes into a **separate, new** database: run `supabase/schema.sql` and all migrations on it, then
+  `python restore_backup.py "Tooba Database 2026-11-17.json.gz" "postgresql://postgres:…@…/postgres"`.
+  It validates the backup, refuses if the target has any data, copies every row with its original ID, resets the ID sequences and re-counts every table. Users get unusable passwords (backups never contain them); the Admin sets new ones. Point a test deployment at it, check, and only then change `DATABASE_URL`.
+
 ## Deploy (Vercel + Supabase)
 1. Create a Supabase project. Go to *Connect* (or *Project Settings → Database*), copy the **Transaction pooler** connection string (port 6543) and put your database password into it.
 2. In Vercel, go to *Project → Settings → Environment Variables* and add:

@@ -1,0 +1,89 @@
+{% extends "base.html" %}{% from "_icons.html" import icon %}{% block title %}Backup & Recovery{% endblock %}
+{% block content %}
+{% macro pkt(v) %}{{ (v + pk).strftime('%d %b %Y, %H:%M') if v else '—' }}{% endmacro %}
+<div class="page-head rise"><div><div class="eyebrow">Admin</div><h1>Backup &amp; Recovery</h1>
+  <p>Har application Google Drive par bhari hui Word form ki shakal mein archive hoti hai (har version alag file), aur poore database ka roz aur hafte ka backup. Supabase asal record hai; backup sirf parhta hai, kabhi kuch delete ya change nahi karta.</p></div></div>
+
+{% if not ready %}
+<section class="card rise warnbox" style="--i:1"><b>Database update pending.</b> Backup tables abhi nahi bani. Supabase SQL editor mein <code>supabase/migrations/20261117000000_drive_archive.sql</code> chalayein, phir ye page dobara kholein.</section>
+{% else %}
+
+<div class="kpis">
+  <div class="kpi rise" style="--i:1"><small>Total applications</small><b>{{ total }}</b></div>
+  <div class="kpi rise" style="--i:2"><small>Backed up (latest version)</small><b>{{ counts.backed_up }}</b></div>
+  <div class="kpi rise" style="--i:3"><small>Pending backup</small><b>{{ counts.pending }}</b></div>
+  <div class="kpi rise" style="--i:4"><small>Failed backup</small><b>{{ counts.failed }}</b></div>
+  <div class="kpi rise" style="--i:5"><small>Empty drafts</small><b>{{ counts.empty }}</b></div>
+  <div class="kpi rise" style="--i:6"><small>Last successful backup</small><b style="font-size:16px">{{ pkt(last_ok) }}</b></div>
+</div>
+<p class="muted">Empty drafts = "New application" dabaya gaya lekin abhi kuch bhara nahi gaya; pehli save par ye bhi archive ho jaati hain. Waqt Pakistan time mein.</p>
+
+<div class="two">
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('shield') }} Google Drive connection</h2>
+    {% if configured %}<span class="state-on">Connected</span>{% else %}<span class="state-off">Not connected</span>{% endif %}</div>
+  {% if configured %}
+    <p>Via {{ mode }}{% if account %} · <b>{{ account }}</b>{% endif %}.</p>
+  {% else %}
+    <p>Drive connect nahi. Applications abhi Drive par nahi ja rahin (Supabase mein mehfooz hain; connect hote hi sab archive ho jayengi).</p>
+  {% endif %}
+  <div class="row" style="flex-wrap:wrap;gap:8px">
+  {% if can_connect %}
+    <a class="btn small" href="{{ url_for('backup_google_connect') }}">{{ icon('key') }} {{ 'Reconnect' if account else 'Connect' }} Google Drive</a>
+    {% if account %}<form method="post" action="{{ url_for('backup_google_disconnect') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="btn small light">Disconnect</button></form>{% endif %}
+  {% endif %}
+  {% if folder_url %}<a class="btn small light" href="{{ folder_url }}" target="_blank" rel="noopener">{{ icon('files') }} Open Google Drive Archive</a>{% endif %}
+  </div>
+  {% if not can_connect %}
+  <p class="muted" style="margin-top:10px">Connect button ke liye Vercel mein <code>GOOGLE_OAUTH_CLIENT_ID</code> aur <code>GOOGLE_OAUTH_CLIENT_SECRET</code> lagayein (Google Cloud → OAuth client, type "Web application", redirect URI: <code>{{ redirect_uri }}</code>), phir redeploy.</p>
+  {% endif %}
+</section>
+
+<section class="card rise" style="--i:3">
+  <div class="card-head"><h2>{{ icon('database') }} Actions</h2></div>
+  <form method="post" action="{{ url_for('backup_recovery_run') }}" class="row" style="flex-wrap:wrap;gap:8px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="btn small" name="action" value="backup" {% if not configured %}disabled{% endif %}>{{ icon('upload') }} Backup Now</button>
+    <button class="btn small light" name="action" value="verify" {% if not configured %}disabled{% endif %}>{{ icon('check') }} Verify All Records</button>
+    <button class="btn small light" name="action" value="weekly" {% if not configured %}disabled{% endif %}>{{ icon('files') }} Weekly full archive now</button>
+  </form>
+  <p style="margin-top:10px"><a class="btn small light" href="{{ url_for('backup_recovery_download') }}">{{ icon('download') }} Download Complete Backup</a></p>
+  <p class="muted">Download: JSON (har table, har document, asal IDs) + CSV + Excel ek zip mein. Last database backup on Drive: {{ pkt(last_db.started_at) if last_db else '—' }}{% if last_db %} ({{ last_db.kind }}){% endif %}.</p>
+  <p class="muted">Automatic: har save / status change ke foran baad; har raat retry + verification; har raat poora database backup; har Itwaar full archive.</p>
+</section>
+</div>
+
+<section class="card rise" style="--i:4">
+  <div class="card-head"><h2>{{ icon('refresh') }} Restore Backup</h2></div>
+  <p>Drive se koi backup file (<code>.json.gz</code> ya weekly <code>.zip</code>) yahan check karein. Ye sirf <b>check</b> karta hai — file sahih hai ya nahi, aur live database mein kaun se records nahi hain. Live data par kabhi kuch nahi likha jata.</p>
+  <form method="post" action="{{ url_for('backup_recovery_restore') }}" enctype="multipart/form-data" class="row" style="gap:8px;flex-wrap:wrap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="file" name="backup" accept=".gz,.json,.zip" required>
+    <button class="btn small light">{{ icon('check') }} Check backup</button>
+  </form>
+  <p class="muted" style="margin-top:10px">Asal restore pehle ek <b>alag, naye</b> database mein hota hai: <code>python restore_backup.py &lt;backup file&gt; &lt;new database URL&gt;</code>. Script khud mana kar deta hai agar target mein pehle se data ho. Wahan check karne ke baad hi website ko us database par shift karein. Tafseel README mein.</p>
+</section>
+
+{% if failed_apps or pending_apps or failures %}
+<div class="two">
+<section class="card rise" style="--i:5">
+  <div class="card-head"><h2>Pending / failed applications</h2><span class="muted">{{ counts.pending }} pending · {{ counts.failed }} failed</span></div>
+  <ul class="mini">
+  {% for a in failed_apps %}<li><span><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.app_id }}</b></a> {{ a.applicant_name }}<span class="sub state-off">failed</span></span><a class="btn small light" href="{{ url_for('backup_recovery_form', app_id=a.id) }}">Word</a></li>{% endfor %}
+  {% for a in pending_apps %}<li><span><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.app_id }}</b></a> {{ a.applicant_name }}<span class="sub">pending</span></span><a class="btn small light" href="{{ url_for('backup_recovery_form', app_id=a.id) }}">Word</a></li>{% endfor %}
+  </ul>
+</section>
+<section class="card rise" style="--i:6">
+  <div class="card-head"><h2>Error report</h2></div>
+  <ul class="mini">{% for f in failures %}<li><span><b>{{ f.name }}</b><span class="sub">{{ f.status }} · {{ f.attempts }} koshish · {{ (f.last_error or '')[:200] }}</span></span></li>{% else %}<li class="muted">Koi error nahi.</li>{% endfor %}</ul>
+</section>
+</div>
+{% endif %}
+
+<div class="card pad-0 rise" style="--i:7"><div class="overflow"><table>
+  <thead><tr><th>Waqt</th><th>Kaam</th><th>Nateeja</th></tr></thead>
+  <tbody>{% for r in runs %}<tr><td class="muted">{{ pkt(r.started_at) }}</td><td>{{ r.kind }}</td><td>{% if r.ok %}<span class="state-on">OK</span>{% elif r.ok is none %}…{% else %}<span class="state-off">Needs attention</span>{% endif %} {{ r.message }}</td></tr>
+  {% else %}<tr><td colspan="3" class="muted">Abhi koi backup history nahi.</td></tr>{% endfor %}</tbody>
+</table></div></div>
+{% endif %}
+{% endblock %}

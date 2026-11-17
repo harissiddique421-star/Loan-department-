@@ -1,4 +1,4 @@
-import os, json, secrets, csv, io, hashlib, hmac
+import os, json, secrets, csv, io, hashlib, hmac, zipfile
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
@@ -17,7 +17,10 @@ from form_fields import (FORM_SECTIONS, FIELD_LABELS, FIELD_NAMES, PHOTO_SLOTS, 
 import gsheets
 import alerts
 import backup
+import db_export
+import drive_archive
 import sheet_layout
+import word_form
 from cache import VersionedCache
 
 app = Flask(__name__)
@@ -812,6 +815,7 @@ def nav_items(role):
                 ("reports", "Reports", "chart", ()),
                 ("audit_log", "Audit Log", "clock", ()),
                 ("google_sheets", "Google Sheets", "refresh", ()),
+                ("backup_recovery", "Backup & Recovery", "database", ()),
                 ("deleted_applications", "Deleted", "trash", ())]
     sheets = ([("disbursement_list", "Disbursement Sheets", "cash", ("disbursement_sheet",))]
               if can("disbursement.manage") or can("cheque.manage") else [])
@@ -2614,14 +2618,29 @@ def drive_backup():
 def cron_backup():
     """Called by Vercel Cron every night."""
     _cron_ok()
-    try:
-        name, size = drive_backup()
-    except Exception as exc:
-        db.session.rollback()
-        alert("backup", "Backup FAILED", f"Raat ka database backup Google Drive par nahi gaya.\n\n{str(exc)[:500]}",
+    result, errors = {}, []
+    if gsheets.configured() or GOOGLE_CLIENT:           # the older rotating weekday file
+        try:
+            result["file"], result["bytes"] = drive_backup()
+        except Exception as exc:
+            db.session.rollback()
+            errors.append(f"Weekday backup file: {str(exc)[:300]}")
+    if ARCHIVE_DB and archive_configured():             # dated daily backup (+ weekly full archive)
+        try:
+            result["daily"] = bool(database_backup())
+            if weekly_due():
+                result["weekly"] = database_backup(weekly=True)
+        except Exception as exc:
+            db.session.rollback()
+            _log_run("daily", False, {}, f"{type(exc).__name__}: {str(exc)[:500]}")
+            errors.append(f"Archive daily backup: {str(exc)[:300]}")
+    elif not (gsheets.configured() or GOOGLE_CLIENT):
+        errors.append("Google Drive configure nahi.")
+    if errors:
+        alert("backup", "Backup FAILED", "Raat ka database backup Google Drive par nahi gaya.\n\n" + "\n".join(errors),
               every=timedelta(hours=20))
-        return jsonify(ok=False, error=str(exc)[:300]), 500
-    return jsonify(ok=True, file=name, bytes=size)
+        return jsonify(ok=False, error="; ".join(errors)[:300], **result), 500
+    return jsonify(ok=True, **result)
 
 
 @app.route("/admin/backup/drive", methods=["POST"])
@@ -2634,6 +2653,837 @@ def backup_drive_now():
         db.session.rollback()
         flash(f"Backup nahi hua: {str(exc)[:300]}")
     return redirect(request.referrer or url_for("admin_applications"))
+
+
+# ---------------------------------------------------------------- Google Drive archive (Word forms + full backups)
+# Every application is archived to Google Drive as a filled Word form, with every saved version
+# kept, plus a daily / weekly complete database backup. Supabase stays the main record; the archive
+# only reads from it. Nothing is ever deleted from Drive by the app.
+#
+# What still needs archiving is worked out from the data itself (a fingerprint of the application's
+# version, status, last audit row, last document and last note), so no change can be missed even if
+# the website crashed right after saving: the next request or the nightly job picks it up.
+class ArchiveFile(db.Model):
+    """One file the app put (or tried to put) in the Drive archive."""
+    __tablename__ = "archive_file"
+    id = db.Column(db.Integer, primary_key=True)
+    application_id = db.Column(db.Integer, index=True)   # no FK: the archive must never block a purge
+    document_id = db.Column(db.Integer)
+    category = db.Column(db.String(20), nullable=False)   # form | version | guarantor | document | database | report
+    version = db.Column(db.Integer)
+    name = db.Column(db.String(300), nullable=False)
+    drive_file_id = db.Column(db.String(100))
+    drive_folder_id = db.Column(db.String(100))
+    md5 = db.Column(db.String(32))
+    size = db.Column(db.BigInteger)
+    fingerprint = db.Column(db.String(200))
+    status = db.Column(db.String(12), default="pending", nullable=False)  # pending|verified|failed|missing|corrupt
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    last_error = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    uploaded_at = db.Column(db.DateTime)
+    verified_at = db.Column(db.DateTime)
+
+
+class ArchiveRun(db.Model):
+    """Backup / verification history shown on Admin → Backup & Recovery."""
+    __tablename__ = "archive_run"
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(20), nullable=False)       # application | daily | weekly | verify | retry | manual
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = db.Column(db.DateTime)
+    ok = db.Column(db.Boolean)
+    message = db.Column(db.Text)
+    summary = db.Column(db.JSON)
+
+
+class ArchiveSetting(db.Model):
+    __tablename__ = "archive_setting"
+    key = db.Column(db.String(60), primary_key=True)
+    value = db.Column(db.Text)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+ARCHIVE_CLIENT = None           # tests put a fake Drive here
+ARCHIVE_DB = True               # set at startup: False until the archive migration is applied
+ARCHIVE_TABLES = ("archive_file", "archive_run", "archive_setting")
+PK_HOURS = timedelta(hours=5)   # Pakistan time for file names and reports
+
+
+def pk_now():
+    return datetime.utcnow() + PK_HOURS
+
+
+def archive_setting(key, default=None):
+    row = db.session.get(ArchiveSetting, key)
+    return row.value if row and row.value is not None else default
+
+
+def set_archive_setting(key, value):
+    row = db.session.get(ArchiveSetting, key)
+    if row is None:
+        db.session.add(ArchiveSetting(key=key, value=value))
+    else:
+        row.value = value
+
+
+def stored_drive_token():
+    blob = archive_setting("oauth_token")
+    return drive_archive.unseal(blob, app.config["SECRET_KEY"]) if blob else None
+
+
+def archive_configured():
+    return bool(ARCHIVE_CLIENT) or (ARCHIVE_DB and drive_archive.configured(stored_drive_token()))
+
+
+def archive_client():
+    if ARCHIVE_CLIENT:
+        return ARCHIVE_CLIENT
+    if has_request_context() and g.get("_archive_inline"):    # while a user waits: fail fast, cron retries
+        return drive_archive.ArchiveDrive(refresh_token=stored_drive_token(), timeout=20, tries=1)
+    return drive_archive.ArchiveDrive(refresh_token=stored_drive_token())
+
+
+def archive_folders(client, check=False):
+    """{folder name: Drive id} for the archive root and its 8 sub-folders (created when missing)."""
+    cached = json.loads(archive_setting("folders") or "{}")
+    if cached.get("_root") and all(f in cached for f in drive_archive.FOLDERS):
+        if not check:
+            return cached
+        root = client.get(cached["_root"])
+        if root and not root.get("trashed"):
+            return cached
+    parent = os.getenv("GOOGLE_ARCHIVE_PARENT_ID") or None
+    root = client.ensure_folder(drive_archive.ROOT_NAME, parent)
+    out = {"_root": root}
+    for name in drive_archive.FOLDERS:
+        out[name] = client.ensure_folder(name, root)
+    set_archive_setting("folders", json.dumps(out))
+    db.session.commit()
+    return out
+
+
+def subfolder(client, folders, top, name):
+    """A dated / per-applicant folder inside one of the 8 archive folders (cached)."""
+    key = f"sub:{top}:{name}"
+    fid = archive_setting(key)
+    if not fid:
+        fid = client.ensure_folder(name, folders[top])
+        set_archive_setting(key, fid)
+        db.session.commit()
+    return fid
+
+
+def _fingerprints(app_ids=None):
+    """{application pk: fingerprint} — changes whenever anything about the application changes."""
+    def maxes(model, col):
+        q = db.session.query(col, func.max(model.id)).group_by(col)
+        if app_ids is not None:
+            q = q.filter(col.in_(app_ids))
+        return dict(q.all())
+    audits = maxes(AuditLog, AuditLog.application_id)
+    docs = maxes(Document, Document.application_id)
+    notes = maxes(ReviewNote, ReviewNote.application_id)
+    q = db.session.query(Application.id, Application.version, Application.status, Application.updated_at,
+                         Application.deleted_at)
+    if app_ids is not None:
+        q = q.filter(Application.id.in_(app_ids))
+    return {i: f"v{v}|{s}|{u.isoformat() if u else ''}|a{audits.get(i, 0)}|d{docs.get(i, 0)}|n{notes.get(i, 0)}"
+               f"|{'del' if dl else ''}"
+            for i, v, s, u, dl in q.all()}
+
+
+def _archived_fingerprints(app_ids=None):
+    """{application pk: fingerprint of its newest verified archived version}."""
+    q = (db.session.query(ArchiveFile.application_id, ArchiveFile.fingerprint)
+         .filter(ArchiveFile.category == "version", ArchiveFile.status == "verified")
+         .order_by(ArchiveFile.application_id, ArchiveFile.version))
+    if app_ids is not None:
+        q = q.filter(ArchiveFile.application_id.in_(app_ids))
+    return {a: f for a, f in q.all()}
+
+
+def _is_empty_draft(a):
+    return a.status == "Draft" and not a.data and not a.cnic and not a.applicant_name
+
+
+def archive_state(page_size=500):
+    """Classify every application (fetched page by page, none skipped):
+    {"backed_up": [...], "pending": [...], "failed": [...], "empty": [...]}."""
+    out = {"backed_up": [], "pending": [], "failed": [], "empty": []}
+    failed = {a for (a,) in db.session.query(ArchiveFile.application_id)
+              .filter(ArchiveFile.status.in_(("failed", "missing", "corrupt")),
+                      ArchiveFile.application_id.isnot(None)).distinct()}
+    last = 0
+    while True:
+        page = (Application.query.filter(Application.id > last).order_by(Application.id).limit(page_size).all())
+        if not page:
+            return out
+        ids = [a.id for a in page]
+        now_fp, done_fp = _fingerprints(ids), _archived_fingerprints(ids)
+        for a in page:
+            if _is_empty_draft(a) and a.id not in done_fp:
+                out["empty"].append(a.id)
+            elif a.id in failed:
+                out["failed"].append(a.id)
+            elif done_fp.get(a.id) == now_fp.get(a.id):
+                out["backed_up"].append(a.id)
+            else:
+                out["pending"].append(a.id)
+        last = page[-1].id
+
+
+def _safe_name(s, n=80):
+    s = "".join(ch for ch in (s or "") if ch not in '\\/:*?"<>|\r\n\t').strip()
+    return s[:n] or "unnamed"
+
+
+def _doc_bytes(d):
+    try:
+        return read_file(d)
+    except Exception:
+        return None
+
+
+def archive_record(a, version):
+    """Everything about one application, as plain data for word_form."""
+    names = {u.id: u.display for u in User.query.all()}
+    when = lambda v: (v + PK_HOURS).strftime("%Y-%m-%d %H:%M") if v else ""
+    vals = a.form_values
+    photos = {}
+    for k in PHOTO_KINDS:
+        p = a.latest_photo(k)
+        if p:
+            photos[k] = _doc_bytes(p)
+    cnic_rows = []
+    for g_, title, name_field in cnic_groups_for(a):
+        row = {"key": g_, "title": title.upper(), "name": vals.get(name_field, "") if name_field else ""}
+        for side in ("front", "back"):
+            d = a.latest_photo(f"cnic_{g_}_{side}")
+            row[side] = _doc_bytes(d) if d else None
+        cnic_rows.append(row)
+    all_docs = Document.query.filter_by(application_id=a.id).order_by(Document.id).all()
+    documents = [(d.id, d.kind, d.original_name, d.content_type, d.size, d.sha256 or "", when(d.created_at),
+                  "deleted" if d.deleted_at else ("replaced" if d.replaced_by else "active")) for d in all_docs]
+    images = [(f"Document {d.id}: {d.original_name}", b) for d in all_docs
+              if d.kind == "document" and not d.deleted_at and (d.content_type or "").startswith("image/")
+              and (b := _doc_bytes(d))]
+    info = [("Application ID", a.app_id), ("Loan number", a.loan_number or ""), ("Status", a.status),
+            ("Loan amount", money(a.loan_amount)), ("Purpose", a.purpose_label or ""),
+            ("Form fee", money(a.fee_amount)), ("Created by", names.get(a.created_by, "")),
+            ("Created", when(a.created_at)), ("Last updated", when(a.updated_at)),
+            ("Updated by", names.get(a.updated_by, "")), ("Submitted", when(a.submitted_at)),
+            ("Assigned staff", names.get(a.assigned_to, "")), ("Reviewer", names.get(a.reviewer_id, "")),
+            ("Approved by", names.get(a.approved_by, "")), ("Approved", when(a.approved_at)),
+            ("Rejection reason", a.rejection_reason or ""),
+            ("Family member CNIC required", "Yes" if a.family_cnic_required else "No"),
+            ("Deleted", when(a.deleted_at) if a.deleted_at else "No"), ("Record version", a.version)]
+    notes = [(when(n.created_at), n.kind, names.get(n.author_id, ""),
+              n.body + (f" (resolved {when(n.resolved_at)})" if n.resolved_at else ""))
+             for n in ReviewNote.query.filter_by(application_id=a.id).order_by(ReviewNote.id)]
+    disb = []
+    for e in DisbursementEntry.query.filter_by(application_id=a.id).order_by(DisbursementEntry.id):
+        b = db.session.get(DisbursementBatch, e.batch_id)
+        disb.append((f"Sheet {ordinal(b.number) if b else '?'} ({b.disb_date if b else ''})",
+                     f"Amount {money(e.amount)} · fee {money(e.fee_amount)} · "
+                     + ("paid " + when(e.disbursed_at) if e.disbursed_at else "not paid")
+                     + (f" · removed: {e.remove_reason or ''}" if e.removed_at else "")))
+        for c in Cheque.query.filter_by(entry_id=e.id).order_by(Cheque.id):
+            disb.append((f"  Cheque {c.cheque_no}", f"{c.status} · {when(c.created_at)}"
+                         + (f" · {c.cancel_reason}" if c.cancel_reason else "")))
+    history = []
+    for h in AuditLog.query.filter_by(application_id=a.id).order_by(AuditLog.id):
+        detail = ""
+        if h.old_value or h.new_value:
+            detail = json.dumps({"old": h.old_value, "new": h.new_value}, ensure_ascii=False)[:400]
+        history.append((when(h.created_at), h.actor_name or "", ACTION_LABELS.get(h.action, h.action),
+                        (h.reason + " " if h.reason else "") + detail))
+    return {"app_id": a.app_id, "version": version, "generated_at": pk_now().strftime("%Y-%m-%d %H:%M"),
+            "values": vals, "photos": photos, "cnic_rows": cnic_rows, "info": info, "notes": notes,
+            "disbursement": disb, "documents": documents, "images": images, "history": history}
+
+
+def _upload_verified(client, row, data, mime, parent, props, existing_id=None):
+    """Upload (or replace the content of `existing_id`), then check Drive has exactly these bytes."""
+    row.attempts = (row.attempts or 0) + 1
+    want = drive_archive.md5(data)
+    if existing_id:
+        meta = client.update(existing_id, data, mime, name=row.name)
+    else:
+        meta = client.upload(row.name, data, mime, parent, props)
+    row.drive_file_id, row.drive_folder_id = meta.get("id"), parent
+    row.uploaded_at = datetime.utcnow()
+    got = meta.get("md5Checksum")
+    if not got:                                  # some responses omit it; ask again
+        got = (client.get(meta["id"]) or {}).get("md5Checksum")
+    if got != want or int(meta.get("size") or len(data)) != len(data):
+        raise drive_archive.DriveError(f"Drive copy does not match (md5 {got} != {want})")
+    row.md5, row.size, row.status = want, len(data), "verified"
+    row.verified_at, row.last_error = datetime.utcnow(), None
+
+
+def _fail(row, exc):
+    row.status, row.last_error = "failed", f"{type(exc).__name__}: {str(exc)[:480]}"
+
+
+def archive_application(app_pk, client, folders):
+    """Archive one application if it changed since its last verified version.
+    Returns "unchanged", "empty", "archived" or raises after recording the failure."""
+    a = db.session.get(Application, app_pk)
+    if a is None:
+        return "gone"
+    fp = _fingerprints([a.id]).get(a.id)
+    done = _archived_fingerprints([a.id]).get(a.id)
+    docs_todo = _documents_to_archive(a.id)
+    latest_ok = _latest_ok(a.id)
+    if done == fp and not docs_todo and latest_ok:
+        _clear_failures(a.id)
+        return "unchanged"
+    if _is_empty_draft(a) and done is None:
+        return "empty"
+    tag = {"tooba": "1", "app": a.id, "app_id": a.app_id}
+    # 1) supporting documents (each once; replaced / deleted ones are kept too)
+    for d in docs_todo:
+        _archive_document(client, folders, a, d, tag)
+    new_version = done != fp
+    last_version = (db.session.query(func.max(ArchiveFile.version))
+                    .filter(ArchiveFile.application_id == a.id, ArchiveFile.category == "version").scalar() or 0)
+    version = last_version + 1 if new_version else max(last_version, 1)
+    if not new_version and latest_ok:
+        _clear_failures(a.id)
+        return "archived"
+    # 2) the filled Word form, checked before it leaves the server
+    record = archive_record(a, version)
+    data = word_form.build(record)
+    problems = word_form.verify(data, a.app_id, {k: v for k, v in record["values"].items()
+                                                 if k in FIELD_NAMES and k not in ("cnic", "g1cnic", "g2cnic")})
+    if problems:
+        raise RuntimeError(f"Word form for {a.app_id} failed its check: {'; '.join(problems[:5])}")
+    stamp = pk_now().strftime("%Y-%m-%d %H%M")
+    person = _safe_name(a.applicant_name or record["values"].get("name"))
+    if new_version:
+        # 2a) this version, as its own file that is never overwritten
+        vrow = ArchiveFile(application_id=a.id, category="version", version=version, fingerprint=fp,
+                           name=f"{a.app_id} - v{version:03d} - {stamp} - {person}.docx")
+        db.session.add(vrow)
+        db.session.commit()
+        try:
+            _upload_verified(client, vrow, data, drive_archive.DOCX_MIME,
+                             subfolder(client, folders, "Updated Application Versions", a.app_id),
+                             dict(tag, kind="version", version=version))
+        except Exception as exc:
+            db.session.rollback()
+            vrow = db.session.get(ArchiveFile, vrow.id)
+            _fail(vrow, exc)
+            db.session.commit()
+            raise
+        db.session.commit()
+    # 2b) the current form (one file per applicant; older contents stay as Drive revisions)
+    _archive_latest(client, folders, a, "form", "Individual Applicant Forms",
+                    f"{a.app_id} - {person}.docx", data, version, fp, tag)
+    # 2c) guarantor records
+    _archive_latest(client, folders, a, "guarantor", "Guarantor Records",
+                    f"{a.app_id} - Guarantors - {person}.docx", word_form.build_guarantors(record), version, fp, tag)
+    _clear_failures(a.id)
+    return "archived"
+
+
+def _latest_ok(app_pk):
+    """Both the current form and the guarantor file are in Drive and verified."""
+    have = {}
+    for r in (ArchiveFile.query.filter(ArchiveFile.application_id == app_pk,
+                                       ArchiveFile.category.in_(("form", "guarantor")))
+              .order_by(ArchiveFile.id)):
+        have[r.category] = r.status
+    return have.get("form") == "verified" and have.get("guarantor") == "verified"
+
+
+def _archive_latest(client, folders, a, category, top, name, data, version, fp, tag):
+    row = (ArchiveFile.query.filter_by(application_id=a.id, category=category)
+           .order_by(ArchiveFile.id.desc()).first())
+    existing = row.drive_file_id if row and row.drive_file_id and row.status == "verified" else None
+    if row is None or not existing:
+        row = row or ArchiveFile(application_id=a.id, category=category)
+        db.session.add(row)
+    row.name, row.version, row.fingerprint, row.status = name, version, fp, "pending"
+    db.session.commit()
+    try:
+        _upload_verified(client, row, data, drive_archive.DOCX_MIME, folders[top],
+                         dict(tag, kind=category), existing_id=existing)
+    except Exception as exc:
+        db.session.rollback()
+        row = db.session.get(ArchiveFile, row.id)
+        _fail(row, exc)
+        db.session.commit()
+        raise
+    db.session.commit()
+
+
+def _documents_to_archive(app_pk):
+    done = {d for (d,) in db.session.query(ArchiveFile.document_id)
+            .filter(ArchiveFile.application_id == app_pk, ArchiveFile.category == "document",
+                    ArchiveFile.status == "verified")}
+    return [d for d in Document.query.filter_by(application_id=app_pk).order_by(Document.id) if d.id not in done]
+
+
+def _archive_document(client, folders, a, d, tag):
+    row = (ArchiveFile.query.filter_by(application_id=a.id, category="document", document_id=d.id)
+           .order_by(ArchiveFile.id.desc()).first())
+    if row is None:
+        state = "deleted " if d.deleted_at else ("replaced " if d.replaced_by else "")
+        row = ArchiveFile(application_id=a.id, document_id=d.id, category="document",
+                          name=f"{d.id} - {state}{d.kind} - {_safe_name(d.original_name, 120)}")
+        db.session.add(row)
+    row.status = "pending"
+    db.session.commit()
+    try:
+        data = read_file(d)
+        if d.sha256 and hashlib.sha256(data).hexdigest() != d.sha256:
+            raise RuntimeError(f"document {d.id} bytes do not match its stored SHA-256")
+        _upload_verified(client, row, data, d.content_type or "application/octet-stream",
+                         subfolder(client, folders, "Supporting Documents", a.app_id),
+                         dict(tag, kind="document", doc=d.id))
+    except Exception as exc:
+        db.session.rollback()
+        row = db.session.get(ArchiveFile, row.id)
+        _fail(row, exc)
+        db.session.commit()
+        raise
+    db.session.commit()
+
+
+def _clear_failures(app_pk):
+    """An application that is now fully archived has no open failures left."""
+    n = (ArchiveFile.query.filter(ArchiveFile.application_id == app_pk,
+                                  ArchiveFile.status.in_(("failed", "pending", "missing", "corrupt")),
+                                  ArchiveFile.category.in_(("version",)))
+         .update({"status": "superseded"}, synchronize_session=False))
+    if n:
+        db.session.commit()
+
+
+def run_archive(budget=None, only=None, kind="retry"):
+    """Archive every application that changed (or failed before), oldest first, within a time budget.
+    Returns a summary dict. Failures are recorded and retried next time; they never stop the run."""
+    import time as _t
+    budget = budget if budget is not None else float(os.getenv("ARCHIVE_TIME_BUDGET", "45"))
+    t0 = _t.monotonic()
+    summary = {"archived": 0, "unchanged": 0, "empty": 0, "failed": 0, "left": 0, "errors": []}
+    if not archive_configured():
+        summary["errors"].append("Google Drive is not connected")
+        return summary
+    client = archive_client()
+    folders = archive_folders(client)
+    if only is not None:
+        todo = list(only)
+    else:
+        st = archive_state()
+        todo = st["failed"] + st["pending"]
+    for i, pk in enumerate(todo):
+        if _t.monotonic() - t0 > budget:
+            summary["left"] = len(todo) - i
+            break
+        try:
+            r = archive_application(pk, client, folders)
+            summary[r if r in summary else "unchanged"] += 1
+        except Exception as exc:
+            db.session.rollback()
+            summary["failed"] += 1
+            summary["errors"].append(f"{pk}: {str(exc)[:200]}")
+    if only is None or summary["failed"] or summary["archived"]:
+        _log_run(kind, not summary["failed"] and not summary["left"], summary,
+                 f"{summary['archived']} archived, {summary['failed']} failed, {summary['left']} left for later")
+    return summary
+
+
+def _log_run(kind, ok, summary, message):
+    try:
+        db.session.add(ArchiveRun(kind=kind, ok=ok, message=message[:2000], summary=summary,
+                                  finished_at=datetime.utcnow()))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def archive_after_change(app_pk):
+    """Called right after a user saved something: archive that application now (and one more
+    pending one), as the system, without ever breaking the user's request."""
+    if not (ARCHIVE_DB and archive_configured()) or os.getenv("ARCHIVE_INLINE", "1") == "0":
+        return
+    try:
+        db.session.remove()
+        g._db_actor, g._archive_inline = ("", "system"), True
+        only = [app_pk] if app_pk else []
+        run_archive(budget=float(os.getenv("ARCHIVE_INLINE_BUDGET", "25")), only=only, kind="application")
+    except Exception:
+        db.session.rollback()
+    finally:
+        db.session.remove()
+
+
+ARCHIVE_TRIGGERS = {"loan_form", "update_status", "upload", "save_details", "set_family_cnic", "add_note",
+                    "set_loan_number", "assign_application", "delete_document", "delete_application",
+                    "restore_application"}
+
+
+@app.after_request
+def _archive_hook(response):
+    if (request.method == "POST" and request.endpoint in ARCHIVE_TRIGGERS and response.status_code < 400
+            and current_user and current_user.is_authenticated):
+        pk = None
+        if request.endpoint == "delete_document":
+            d = db.session.get(Document, request.view_args.get("doc_id"))
+            pk = d.application_id if d else None
+        else:
+            pk = request.view_args.get("app_id")
+        archive_after_change(pk)
+    return response
+
+
+# ---- complete database backups
+def _db_files(stamp):
+    """(json.gz, csv zip, xlsx, payload) — all from one snapshot."""
+    data, counts = backup.build(db.session, db.metadata)
+    payload = db_export.load(data)
+    return [(f"Tooba Database {stamp}.json.gz", data, "application/gzip"),
+            (f"Tooba Database {stamp} - CSV.zip", db_export.csv_zip(payload), "application/zip"),
+            (f"Tooba Database {stamp}.xlsx", db_export.xlsx(payload), drive_archive.XLSX_MIME)], payload
+
+
+def _manifest():
+    return [{"id": f.id, "application_id": f.application_id, "document_id": f.document_id,
+             "category": f.category, "version": f.version, "name": f.name, "drive_file_id": f.drive_file_id,
+             "md5": f.md5, "size": f.size, "status": f.status,
+             "verified_at": f.verified_at.isoformat() if f.verified_at else None}
+            for f in ArchiveFile.query.order_by(ArchiveFile.id)]
+
+
+def _put_db_file(client, folder, name, data, mime, kind, existing=None):
+    row = ArchiveFile(category="database" if kind != "report" else "report", name=name)
+    db.session.add(row)
+    db.session.commit()
+    try:
+        _upload_verified(client, row, data, mime, folder, {"tooba": "1", "kind": kind}, existing_id=existing)
+    except Exception as exc:
+        db.session.rollback()
+        row = db.session.get(ArchiveFile, row.id)
+        _fail(row, exc)
+        db.session.commit()
+        raise
+    db.session.commit()
+    return row
+
+
+def database_backup(weekly=False):
+    """Daily (or weekly) complete backup into Drive, each file checked after upload."""
+    client = archive_client()
+    folders = archive_folders(client, check=True)
+    now = pk_now()
+    files, payload = _db_files(now.strftime("%Y-%m-%d"))
+    counts = {t: len(r) for t, r in payload["tables"].items()}
+    if weekly:
+        y, w, _ = now.isocalendar()
+        label = f"{y}-W{w:02d}"
+        folder = subfolder(client, folders, "Weekly Backups", label)
+        z = io.BytesIO()
+        with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, data, _ in files:
+                zf.writestr(("database.json.gz" if name.endswith(".json.gz") else name), data)
+            zf.writestr("archive-manifest.json", json.dumps(_manifest(), ensure_ascii=False, indent=1))
+            zf.writestr("README.txt", "Tooba Loan Department weekly full archive.\n"
+                        "database.json.gz holds every table and every uploaded document (original IDs).\n"
+                        "archive-manifest.json lists every Word form / document file in the Drive archive.\n"
+                        "Restore with: python restore_backup.py <this zip> <NEW database URL>\n")
+        _put_db_file(client, folder, f"Tooba Full Archive {label}.zip", z.getvalue(), "application/zip", "weekly")
+        _log_run("weekly", True, {"counts": counts}, f"Weekly full archive {label} saved")
+        return label
+    folder = subfolder(client, folders, "Daily Backups", now.strftime("%Y-%m-%d"))
+    for name, data, mime in files:
+        _put_db_file(client, folder, name, data, mime, "daily")
+    # newest copy in "Complete Database Backup" (same file updated; Drive keeps earlier revisions)
+    for name, data, mime in files:
+        latest = name.replace(now.strftime("%Y-%m-%d"), "- latest")
+        key = f"latest:{latest}"
+        existing = archive_setting(key)
+        try:
+            row = _put_db_file(client, folders["Complete Database Backup"], latest, data, mime, "latest", existing)
+        except drive_archive.DriveError:
+            if not existing:
+                raise
+            row = _put_db_file(client, folders["Complete Database Backup"], latest, data, mime, "latest")
+        set_archive_setting(key, row.drive_file_id)
+        db.session.commit()
+    _log_run("daily", True, {"counts": counts}, "Daily complete database backup saved")
+    return counts
+
+
+def weekly_due():
+    last = (ArchiveRun.query.filter_by(kind="weekly", ok=True).order_by(ArchiveRun.id.desc()).first())
+    return pk_now().weekday() == 6 or last is None or last.started_at < datetime.utcnow() - timedelta(days=7)
+
+
+def verify_archive(write_report=True):
+    """Compare the database with what is really in Drive. Marks missing / changed files so the next
+    run uploads them again, finds duplicates, and counts. Returns the report dict."""
+    client = archive_client()
+    folders = archive_folders(client, check=True)
+    drive = {f["id"]: f for f in client.list_archive()}
+    rep = {"checked_at": pk_now().strftime("%Y-%m-%d %H:%M"), "missing": [], "corrupt": [], "duplicates": [],
+           "untracked": []}
+    tracked = set()
+    last = 0
+    while True:                                       # every archived file, page by page
+        rows = (ArchiveFile.query.filter(ArchiveFile.id > last, ArchiveFile.status == "verified")
+                .order_by(ArchiveFile.id).limit(500).all())
+        if not rows:
+            break
+        for r in rows:
+            tracked.add(r.drive_file_id)
+            f = drive.get(r.drive_file_id)
+            if f is None:
+                f = client.get(r.drive_file_id)      # not tagged / search lag: ask directly
+            if f is None or f.get("trashed"):
+                r.status, r.last_error = "missing", "not found in Drive during verification"
+                rep["missing"].append(r.name)
+            elif r.md5 and f.get("md5Checksum") and f["md5Checksum"] != r.md5:
+                r.status, r.last_error = "corrupt", "Drive content differs from what was uploaded"
+                rep["corrupt"].append(r.name)
+        db.session.commit()
+        last = rows[-1].id
+    groups = {}
+    for f in drive.values():
+        p = f.get("appProperties") or {}
+        key = (p.get("kind"), p.get("app"), p.get("version") or p.get("doc"))
+        if p.get("kind") in ("version", "document", "form", "guarantor"):
+            groups.setdefault(key, []).append(f)
+        if f["id"] not in tracked and p.get("kind") in ("version", "document"):
+            rep["untracked"].append(f.get("name"))
+    rep["duplicates"] = [[f.get("name") for f in fs] for fs in groups.values() if len(fs) > 1]
+    st = archive_state()
+    total = Application.query.count()
+    archived_apps = {p.get("app") for f in drive.values() if (p := f.get("appProperties") or {}).get("kind") == "form"}
+    rep.update({"applications_in_database": total,
+                "applications_with_form_in_drive": len(archived_apps),
+                "backed_up": len(st["backed_up"]), "pending": len(st["pending"]), "failed": len(st["failed"]),
+                "empty_drafts": len(st["empty"]),
+                "not_yet_archived": [a.app_id for a in Application.query.filter(
+                    Application.id.in_(st["pending"] + st["failed"])).order_by(Application.id).limit(200)]})
+    rep["ok"] = (not rep["missing"] and not rep["corrupt"] and not rep["duplicates"] and not st["failed"]
+                 and not st["pending"] and len(archived_apps) == total - len(st["empty"]))
+    if write_report:
+        text_ = json.dumps(rep, ensure_ascii=False, indent=1)
+        try:
+            _put_db_file(client, folders["Backup Reports"], f"Verification Report {rep['checked_at'].replace(':', '')}.json",
+                         text_.encode(), "application/json", "report")
+        except Exception as exc:
+            rep.setdefault("errors", []).append(f"report upload: {exc}")
+    _log_run("verify", rep["ok"], rep,
+             f"{rep['applications_with_form_in_drive']}/{total - rep['empty_drafts']} applications in Drive; "
+             f"{len(rep['missing'])} missing, {len(rep['corrupt'])} changed, {len(rep['duplicates'])} duplicates, "
+             f"{rep['pending']} pending, {rep['failed']} failed")
+    return rep
+
+
+@app.route("/cron/archive")
+@csrf.exempt
+def cron_archive():
+    """Vercel Cron, daily: archive anything not yet in Drive (retrying failures), then verify."""
+    _cron_ok()
+    if not ARCHIVE_DB:
+        return jsonify(ok=False, error="archive migration not applied"), 503
+    if not archive_configured():
+        alert("archive", "Google Drive archive NOT CONNECTED",
+              "Applications Google Drive par archive nahi ho rahi: Drive connect nahi.\n"
+              "Admin > Backup & Recovery > Connect Google Drive.", every=timedelta(hours=20))
+        return jsonify(ok=False, error="Google Drive not connected"), 503
+    try:
+        s = run_archive()
+        rep = verify_archive()
+        if rep["missing"] or rep["corrupt"]:          # re-upload anything verification found missing
+            s2 = run_archive(budget=60)
+            s["archived"] += s2["archived"]
+    except Exception as exc:
+        db.session.rollback()
+        _log_run("retry", False, {}, f"{type(exc).__name__}: {str(exc)[:500]}")
+        alert("archive", "Google Drive archive FAILED", f"Roz ka archive / verification nahi hua.\n\n{str(exc)[:500]}",
+              every=timedelta(hours=20))
+        return jsonify(ok=False, error=str(exc)[:300]), 500
+    if not rep["ok"]:
+        alert("archive", "Google Drive archive needs attention",
+              f"{rep['pending']} pending, {rep['failed']} failed, {len(rep['missing'])} missing, "
+              f"{len(rep['corrupt'])} changed, {len(rep['duplicates'])} duplicate file group(s).\n"
+              "Admin > Backup & Recovery dekhein.", every=timedelta(hours=20))
+    return jsonify(ok=rep["ok"], archived=s["archived"], failed=s["failed"], left=s["left"],
+                   missing=len(rep["missing"]), corrupt=len(rep["corrupt"]))
+
+
+# ---- Admin → Backup & Recovery
+def _redirect_uri():
+    base = os.getenv("APP_BASE_URL") or request.url_root.rstrip("/")
+    return base.rstrip("/") + url_for("backup_google_callback")
+
+
+@app.route("/admin/backup-recovery")
+@requires("export")
+def backup_recovery():
+    ctx = {"ready": ARCHIVE_DB, "configured": False, "mode": None}
+    if ARCHIVE_DB:
+        st = archive_state()
+        token = stored_drive_token()
+        last_ok = (db.session.query(func.max(ArchiveFile.verified_at)).filter(ArchiveFile.status == "verified")
+                   .scalar())
+        last_db = ArchiveRun.query.filter(ArchiveRun.kind.in_(("daily", "weekly")), ArchiveRun.ok.is_(True)) \
+            .order_by(ArchiveRun.id.desc()).first()
+        folders = json.loads(archive_setting("folders") or "{}")
+        ctx.update(
+            configured=archive_configured(), mode=("test client" if ARCHIVE_CLIENT else drive_archive.mode(token)),
+            account=archive_setting("oauth_email"), can_connect=bool(drive_archive.oauth_client()),
+            total=Application.query.count(), counts={k: len(v) for k, v in st.items()},
+            failed_apps=Application.query.filter(Application.id.in_(st["failed"])).order_by(Application.id).all(),
+            pending_apps=Application.query.filter(Application.id.in_(st["pending"])).order_by(Application.id)
+            .limit(50).all(),
+            last_ok=last_ok, last_db=last_db,
+            failures=ArchiveFile.query.filter(ArchiveFile.status.in_(("failed", "missing", "corrupt")))
+            .order_by(ArchiveFile.id.desc()).limit(30).all(),
+            runs=ArchiveRun.query.order_by(ArchiveRun.id.desc()).limit(40).all(),
+            folder_url=(f"https://drive.google.com/drive/folders/{folders['_root']}" if folders.get("_root") else None),
+            redirect_uri=_redirect_uri())
+    return render_template("backup_recovery.html", **ctx, pk=PK_HOURS)
+
+
+@app.route("/admin/backup-recovery/run", methods=["POST"])
+@requires("export")
+def backup_recovery_run():
+    action = request.form.get("action")
+    if not (ARCHIVE_DB and archive_configured()):
+        flash("Pehle Google Drive connect karein.")
+        return redirect(url_for("backup_recovery"))
+    try:
+        if action == "backup":
+            s = run_archive(kind="manual")
+            database_backup()
+            msg = (f"Backup mukammal: {s['archived']} application(s) archive hui, {s['failed']} fail, "
+                   f"{s['left']} baqi (agli dafa). Database backup Drive par save aur verify ho gaya.")
+            if s["failed"] or s["left"]:
+                msg += " Kuch kaam baqi hai — dobara 'Backup Now' dabayein ya raat ka automatic run intezar karein."
+        elif action == "verify":
+            rep = verify_archive()
+            msg = ("Verification: sab theek hai." if rep["ok"] else
+                   f"Verification: {rep['pending']} pending, {rep['failed']} failed, {len(rep['missing'])} missing, "
+                   f"{len(rep['corrupt'])} changed, {len(rep['duplicates'])} duplicate group(s).")
+        elif action == "weekly":
+            msg = f"Weekly full archive {database_backup(weekly=True)} Drive par save ho gaya."
+        else:
+            abort(400)
+        audit("backup.archive", new={"action": action})
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        msg = f"Backup mein masla: {str(exc)[:300]}"
+    flash(msg)
+    return redirect(url_for("backup_recovery"))
+
+
+@app.route("/admin/backup-recovery/download")
+@requires("export")
+def backup_recovery_download():
+    stamp = pk_now().strftime("%Y-%m-%d")
+    files, payload = _db_files(stamp)
+    z = io.BytesIO()
+    with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data, _ in files:
+            zf.writestr(("database.json.gz" if name.endswith(".json.gz") else name), data)
+        if ARCHIVE_DB:
+            zf.writestr("archive-manifest.json", json.dumps(_manifest(), ensure_ascii=False, indent=1))
+    audit("export.full_backup", new={"tables": {t: len(r) for t, r in payload["tables"].items()}})
+    db.session.commit()
+    return Response(z.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=tooba-complete-backup-{stamp}.zip"})
+
+
+@app.route("/admin/backup-recovery/form/<int:app_id>.docx")
+@requires("export")
+def backup_recovery_form(app_id):
+    """The filled Word form of one application, made on the spot (same file as in Drive)."""
+    a = get_app(app_id, allow_deleted=True)
+    data = word_form.build(archive_record(a, a.version))
+    return Response(data, mimetype=drive_archive.DOCX_MIME,
+                    headers={"Content-Disposition": f"attachment; filename={a.app_id}.docx"})
+
+
+@app.route("/admin/backup-recovery/restore", methods=["POST"])
+@requires("export")
+def backup_recovery_restore():
+    """Check an uploaded backup: validates it and lists what the live database is missing.
+    Never writes to the live database — a real restore goes into a separate database first."""
+    f = request.files.get("backup")
+    if not f or not f.filename:
+        flash("Backup file chunein.")
+        return redirect(url_for("backup_recovery"))
+    try:
+        payload = db_export.load(f.read())
+        report = db_export.validate(payload, db.metadata)
+        live = {}
+        for t in db.metadata.sorted_tables:
+            if "id" in t.columns and t.name in payload["tables"]:
+                try:
+                    live[t.name] = {i for (i,) in db.session.execute(sa_select(t.c.id))}
+                except Exception:
+                    db.session.rollback()
+        diff = db_export.compare(payload, live)
+    except Exception as exc:
+        flash(f"Ye file parhi nahi ja saki: {str(exc)[:200]}")
+        return redirect(url_for("backup_recovery"))
+    audit("backup.restore_check", new={"file": secure_filename(f.filename), "ok": report["ok"]})
+    db.session.commit()
+    return render_template("restore_check.html", payload=payload, report=report, diff=diff, filename=f.filename)
+
+
+@app.route("/admin/backup-recovery/google/connect")
+@requires("export")
+def backup_google_connect():
+    if not drive_archive.oauth_client():
+        flash("Pehle Vercel mein GOOGLE_OAUTH_CLIENT_ID aur GOOGLE_OAUTH_CLIENT_SECRET lagayein.")
+        return redirect(url_for("backup_recovery"))
+    session["drive_oauth_state"] = state = secrets.token_urlsafe(24)
+    return redirect(drive_archive.auth_url(_redirect_uri(), state))
+
+
+@app.route("/admin/backup-recovery/google/callback")
+@requires("export")
+def backup_google_callback():
+    state = session.pop("drive_oauth_state", None)
+    if not state or not secrets.compare_digest(state, request.args.get("state", "")):
+        abort(400)
+    if request.args.get("error") or not request.args.get("code"):
+        flash("Google Drive connect nahi hua: " + (request.args.get("error") or "no code"))
+        return redirect(url_for("backup_recovery"))
+    try:
+        token, email = drive_archive.exchange_code(request.args["code"], _redirect_uri())
+    except Exception as exc:
+        flash(f"Google Drive connect nahi hua: {str(exc)[:200]}")
+        return redirect(url_for("backup_recovery"))
+    set_archive_setting("oauth_token", drive_archive.seal(token, app.config["SECRET_KEY"]))
+    set_archive_setting("oauth_email", email or "")
+    set_archive_setting("folders", None)
+    audit("backup.drive_connected", new={"account": email})
+    db.session.commit()
+    try:
+        archive_folders(archive_client(), check=True)
+        flash(f"Google Drive connect ho gaya ({email or 'account'}). Archive folders ban gaye.")
+    except Exception as exc:
+        flash(f"Connect ho gaya lekin folders nahi bane: {str(exc)[:200]}")
+    return redirect(url_for("backup_recovery"))
+
+
+@app.route("/admin/backup-recovery/google/disconnect", methods=["POST"])
+@requires("export")
+def backup_google_disconnect():
+    set_archive_setting("oauth_token", None)
+    audit("backup.drive_disconnected", new={"account": archive_setting("oauth_email")})
+    db.session.commit()
+    flash("Google Drive disconnect ho gaya. Drive mein archive files waisi hi maujood hain.")
+    return redirect(url_for("backup_recovery"))
 
 
 # ---------------------------------------------------------------- full Excel export
@@ -2882,7 +3732,8 @@ import time as _rl_time
 
 RATE_LIMITS = {"heavy": (10, 60), "search": (120, 60), "photo": (300, 60), "any": (600, 60), "anon": (300, 60)}
 HEAVY_ENDPOINTS = {"export_csv", "export_xlsx", "backup_export", "backup_drive_now", "reports_export",
-                   "disbursement_xlsx"}
+                   "disbursement_xlsx", "backup_recovery_run", "backup_recovery_download", "backup_recovery_form",
+                   "backup_recovery_restore"}
 _rl_hits, _rl_lock = {}, _threading.Lock()
 
 
@@ -2905,7 +3756,7 @@ def _rate_ok(bucket, who):
 
 @app.before_request
 def rate_limit():
-    if app.config.get("TESTING") or request.endpoint in (None, "static", "cron_gsheets", "cron_backup"):
+    if app.config.get("TESTING") or request.endpoint in (None, "static", "cron_gsheets", "cron_backup", "cron_archive"):
         return None
     signed_in = current_user and current_user.is_authenticated
     who = f"u{current_user.id}" if signed_in else f"ip{client_ip()}"
@@ -3019,6 +3870,8 @@ with app.app_context():
             c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch"))
         # Performance migration (20261107…) is optional: without it the app keeps the old
         # (slower) search and simply does not cache.
+        # Drive archive migration (20261117…) is optional too: without it the archive stays off.
+        ARCHIVE_DB = all(_insp.has_table(t) for t in ARCHIVE_TABLES)
         with db.engine.connect() as _c:
             PERF_DB = bool(_c.execute(text(
                 "select count(*) = 2 from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
