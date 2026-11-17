@@ -2756,9 +2756,10 @@ def archive_client():
 
 
 def archive_folders(client, check=False):
-    """{folder name: Drive id} for the archive root and its 8 sub-folders (created when missing)."""
+    """{folder name: Drive id} for the archive root and its 3 folders (created when missing).
+    An archive made with the older 8-folder layout is tidied into the new one once."""
     cached = json.loads(archive_setting("folders") or "{}")
-    if cached.get("_root") and all(f in cached for f in drive_archive.FOLDERS):
+    if cached.get("_root") and all(f in cached for f in drive_archive.FOLDERS) and not cached.get("_old"):
         if not check:
             return cached
         root = client.get(cached["_root"])
@@ -2769,20 +2770,123 @@ def archive_folders(client, check=False):
     out = {"_root": root}
     for name in drive_archive.FOLDERS:
         out[name] = client.ensure_folder(name, root)
+    old = {n: cached[n] for n in drive_archive.OLD_FOLDERS if cached.get(n)} or cached.get("_old") or {}
+    if old:
+        out["_old"] = old
     set_archive_setting("folders", json.dumps(out))
     db.session.commit()
+    if old:
+        reorganize_archive(client, out)
     return out
 
 
 def subfolder(client, folders, top, name):
-    """A dated / per-applicant folder inside one of the 8 archive folders (cached)."""
-    key = f"sub:{top}:{name}"
+    """A dated folder inside Daily Backups / Weekly Backups (cached)."""
+    key = f"sub2:{top}:{name}"
     fid = archive_setting(key)
     if not fid:
         fid = client.ensure_folder(name, folders[top])
         set_archive_setting(key, fid)
         db.session.commit()
     return fid
+
+
+def applicant_folder(client, folders, a, sub=None):
+    """Applicants/<app id - name>/ (renamed when the name changes), or its Documents / Old Versions."""
+    person = _safe_name(a.applicant_name or (a.form_values or {}).get("name") or "", 60)
+    name = f"{a.app_id} - {person}" if person != "unnamed" else a.app_id
+    key = f"appdir:{a.id}"
+    info = json.loads(archive_setting(key) or "{}")
+    if not info.get("id"):
+        info = {"id": client.ensure_folder(name, folders["Applicants"]), "name": name}
+        set_archive_setting(key, json.dumps(info))
+        db.session.commit()
+    elif info.get("name") != name:
+        client.rename(info["id"], name)
+        info["name"] = name
+        set_archive_setting(key, json.dumps(info))
+        db.session.commit()
+    if not sub:
+        return info["id"]
+    skey = f"appdir:{a.id}:{sub}"
+    fid = archive_setting(skey)
+    if not fid:
+        fid = client.ensure_folder(sub, info["id"])
+        set_archive_setting(skey, fid)
+        db.session.commit()
+    return fid
+
+
+def reorganize_archive(client, folders):
+    """One-time move from the older 8-folder layout: every file goes to its applicant's folder or to
+    the dated backup folder. Nothing is deleted: only the old 'latest' copies of the database (the
+    same data is in each dated daily folder) and the emptied old folders go to Drive's bin, where
+    they stay recoverable for 30 days."""
+    import re as _re
+    moved = errors = 0
+    seen = set()
+    for r in ArchiveFile.query.filter(ArchiveFile.drive_file_id.isnot(None)).order_by(ArchiveFile.id.desc()):
+        if r.drive_file_id in seen:
+            continue
+        seen.add(r.drive_file_id)
+        try:
+            target = None
+            if r.application_id and r.category in ("form", "guarantor", "version", "document"):
+                a = db.session.get(Application, r.application_id)
+                if a is None:
+                    continue
+                target = applicant_folder(client, folders, a, {"version": "Old Versions",
+                                                              "document": "Documents"}.get(r.category))
+            elif r.category == "report":
+                m = _re.search(r"(\d{4}-\d{2}-\d{2})", r.name or "")
+                target = subfolder(client, folders, "Daily Backups",
+                                   m.group(1) if m else pk_now().strftime("%Y-%m-%d"))
+            elif r.category == "database" and "- latest" in (r.name or ""):
+                client.trash(r.drive_file_id)
+                (ArchiveFile.query.filter(ArchiveFile.drive_file_id == r.drive_file_id)
+                 .update({"status": "superseded",
+                          "last_error": "duplicate 'latest' copy put in Drive's bin when folders were simplified"},
+                         synchronize_session=False))
+                db.session.commit()
+                continue
+            if target and r.drive_folder_id != target:
+                client.move(r.drive_file_id, target)
+                (ArchiveFile.query.filter(ArchiveFile.drive_file_id == r.drive_file_id)
+                 .update({"drive_folder_id": target}, synchronize_session=False))
+                db.session.commit()
+                moved += 1
+        except Exception as exc:
+            db.session.rollback()
+            if getattr(exc, "status", None) == 404:       # already gone from Drive: verification handles it
+                continue
+            errors += 1
+            app.logger.warning("archive reorganize %s: %s", r.id, exc)
+    if errors:                                           # try again next time; old folders stay
+        _log_run("reorganize", False, {"moved": moved, "errors": errors},
+                 f"Folders simplified: {moved} files moved, {errors} not yet (retried next run)")
+        return
+    def has_files(fid):
+        return any(c.get("mimeType") != drive_archive.FOLDER_MIME or has_files(c["id"])
+                   for c in client.children(fid))
+    kept = []
+    for name, fid in folders.get("_old", {}).items():
+        try:
+            if has_files(fid):
+                kept.append(name)
+            else:
+                client.trash(fid)
+        except Exception:
+            kept.append(name)
+    out = {k: v for k, v in folders.items() if k != "_old"}
+    if kept:
+        out["_old"] = {n: folders["_old"][n] for n in kept}
+    folders.clear()
+    folders.update(out)
+    set_archive_setting("folders", json.dumps(out))
+    db.session.commit()
+    _log_run("reorganize", not kept, {"moved": moved, "kept": kept},
+             f"Folders simplified: {moved} files moved into Applicants / Daily Backups"
+             + (f"; still holding files: {', '.join(kept)}" if kept else ""))
 
 
 def _fingerprints(app_ids=None):
@@ -2981,7 +3085,7 @@ def archive_application(app_pk, client, folders):
         db.session.commit()
         try:
             _upload_verified(client, vrow, data, drive_archive.DOCX_MIME,
-                             subfolder(client, folders, "Updated Application Versions", a.app_id),
+                             applicant_folder(client, folders, a, "Old Versions"),
                              dict(tag, kind="version", version=version))
         except Exception as exc:
             db.session.rollback()
@@ -2991,10 +3095,10 @@ def archive_application(app_pk, client, folders):
             raise
         db.session.commit()
     # 2b) the current form (one file per applicant; older contents stay as Drive revisions)
-    _archive_latest(client, folders, a, "form", "Individual Applicant Forms",
+    _archive_latest(client, folders, a, "form",
                     f"{a.app_id} - {person}.docx", data, version, fp, tag)
     # 2c) guarantor records
-    _archive_latest(client, folders, a, "guarantor", "Guarantor Records",
+    _archive_latest(client, folders, a, "guarantor",
                     f"{a.app_id} - Guarantors - {person}.docx", word_form.build_guarantors(record), version, fp, tag)
     _clear_failures(a.id)
     return "archived"
@@ -3010,7 +3114,7 @@ def _latest_ok(app_pk):
     return have.get("form") == "verified" and have.get("guarantor") == "verified"
 
 
-def _archive_latest(client, folders, a, category, top, name, data, version, fp, tag):
+def _archive_latest(client, folders, a, category, name, data, version, fp, tag):
     row = (ArchiveFile.query.filter_by(application_id=a.id, category=category)
            .order_by(ArchiveFile.id.desc()).first())
     existing = row.drive_file_id if row and row.drive_file_id and row.status == "verified" else None
@@ -3020,7 +3124,7 @@ def _archive_latest(client, folders, a, category, top, name, data, version, fp, 
     row.name, row.version, row.fingerprint, row.status = name, version, fp, "pending"
     db.session.commit()
     try:
-        _upload_verified(client, row, data, drive_archive.DOCX_MIME, folders[top],
+        _upload_verified(client, row, data, drive_archive.DOCX_MIME, applicant_folder(client, folders, a),
                          dict(tag, kind=category), existing_id=existing)
     except Exception as exc:
         db.session.rollback()
@@ -3053,7 +3157,7 @@ def _archive_document(client, folders, a, d, tag):
         if d.sha256 and hashlib.sha256(data).hexdigest() != d.sha256:
             raise RuntimeError(f"document {d.id} bytes do not match its stored SHA-256")
         _upload_verified(client, row, data, d.content_type or "application/octet-stream",
-                         subfolder(client, folders, "Supporting Documents", a.app_id),
+                         applicant_folder(client, folders, a, "Documents"),
                          dict(tag, kind="document", doc=d.id))
     except Exception as exc:
         db.session.rollback()
@@ -3255,19 +3359,6 @@ def database_backup(weekly=False):
     for name, data, mime in files:
         _put_db_file(client, folder, name, data, mime, "daily")
     _put_db_file(client, folder, f"Tooba Word Forms {now.strftime('%Y-%m-%d')}.zip", forms, "application/zip", "daily")
-    # newest copy in "Complete Database Backup" (same file updated; Drive keeps earlier revisions)
-    for name, data, mime in files:
-        latest = name.replace(now.strftime("%Y-%m-%d"), "- latest")
-        key = f"latest:{latest}"
-        existing = archive_setting(key)
-        try:
-            row = _put_db_file(client, folders["Complete Database Backup"], latest, data, mime, "latest", existing)
-        except drive_archive.DriveError:
-            if not existing:
-                raise
-            row = _put_db_file(client, folders["Complete Database Backup"], latest, data, mime, "latest")
-        set_archive_setting(key, row.drive_file_id)
-        db.session.commit()
     _log_run("daily", not form_problems, {"counts": counts, "word_forms": nforms, "problems": form_problems},
              f"Daily complete database backup saved, with {nforms} filled Word forms"
              + (f"; Word form problems: {'; '.join(form_problems)[:600]}" if form_problems else ""))
@@ -3349,7 +3440,8 @@ def verify_archive(write_report=True):
     if write_report:
         text_ = json.dumps(rep, ensure_ascii=False, indent=1)
         try:
-            _put_db_file(client, folders["Backup Reports"], f"Verification Report {rep['checked_at'].replace(':', '')}.json",
+            _put_db_file(client, subfolder(client, folders, "Daily Backups", pk_now().strftime("%Y-%m-%d")),
+                         f"Verification Report {rep['checked_at'].replace(':', '')}.json",
                          text_.encode(), "application/json", "report")
         except Exception as exc:
             rep.setdefault("errors", []).append(f"report upload: {exc}")

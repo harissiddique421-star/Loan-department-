@@ -3,14 +3,14 @@
 Folder layout, created automatically inside GOOGLE_ARCHIVE_PARENT_ID (or the Drive root):
 
   Tooba Loan Department – Complete Archive/
-    Individual Applicant Forms/      latest filled Word form per applicant (old ones kept as revisions)
-    Updated Application Versions/    every saved version, one file each, never overwritten
-    Guarantor Records/               guarantor details per applicant
-    Supporting Documents/            every uploaded photo / CNIC / document, one folder per applicant
-    Complete Database Backup/        latest JSON + CSV + Excel of the whole database
-    Daily Backups/                   one dated folder per day
-    Weekly Backups/                  one dated folder per week (full archive)
-    Backup Reports/                  verification and backup reports
+    Applicants/
+      TBF-0001 - Name/               one folder per applicant
+        TBF-0001 - Name.docx         latest filled Word form (old contents kept as revisions)
+        TBF-0001 - Guarantors - Name.docx
+        Documents/                   every uploaded photo / CNIC / document
+        Old Versions/                every saved version, one file each, never overwritten
+    Daily Backups/<date>/            database (JSON + CSV + Excel), all Word forms (zip), reports
+    Weekly Backups/<week>/           full archive zip
 
 Credentials (never sent to the browser):
   * an OAuth refresh token of the Google account that owns the archive — stored encrypted in
@@ -28,9 +28,9 @@ import time
 from urllib.parse import quote
 
 ROOT_NAME = "Tooba Loan Department – Complete Archive"
-FOLDERS = ["Individual Applicant Forms", "Updated Application Versions", "Guarantor Records",
-           "Supporting Documents", "Complete Database Backup", "Daily Backups", "Weekly Backups",
-           "Backup Reports"]
+FOLDERS = ["Applicants", "Daily Backups", "Weekly Backups"]
+OLD_FOLDERS = ["Individual Applicant Forms", "Updated Application Versions", "Guarantor Records",
+               "Supporting Documents", "Complete Database Backup", "Backup Reports"]
 DRIVE = "https://www.googleapis.com/drive/v3/files"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -201,6 +201,34 @@ class ArchiveDrive:
         if parent:
             meta["parents"] = [parent]
         return self._json("POST", f"{DRIVE}?supportsAllDrives=true&fields=id", json=meta)["id"]
+
+    def rename(self, file_id, name):
+        return self._json("PATCH", f"{DRIVE}/{file_id}?supportsAllDrives=true&fields=id,name", json={"name": name})
+
+    def move(self, file_id, new_parent):
+        """Put a file (or folder) into another folder. Nothing is copied or deleted."""
+        cur = self._json("GET", f"{DRIVE}/{file_id}?supportsAllDrives=true&fields=parents")
+        old = ",".join(cur.get("parents") or [])
+        if old == new_parent:
+            return
+        self._json("PATCH", f"{DRIVE}/{file_id}?supportsAllDrives=true&fields=id&addParents={new_parent}"
+                            + (f"&removeParents={old}" if old else ""), json={})
+
+    def trash(self, file_id):
+        """Move to Drive's bin (recoverable there for 30 days)."""
+        self._json("PATCH", f"{DRIVE}/{file_id}?supportsAllDrives=true&fields=id", json={"trashed": True})
+
+    def children(self, parent):
+        q = f"'{parent}' in parents and trashed = false"
+        out, token = [], ""
+        while True:
+            res = self._json("GET", f"{DRIVE}?q={quote(q)}&supportsAllDrives=true&includeItemsFromAllDrives=true"
+                                    f"&pageSize=1000&fields=nextPageToken,files(id,name,mimeType)"
+                                    + (f"&pageToken={quote(token)}" if token else ""))
+            out += res.get("files", [])
+            token = res.get("nextPageToken") or ""
+            if not token:
+                return out
 
     def folder_url(self, folder_id):
         return f"https://drive.google.com/drive/folders/{folder_id}"
