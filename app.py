@@ -880,6 +880,17 @@ def home_url():
     return url_for(PORTAL_INFO[current_user.role]["home"])
 
 
+@app.route("/privacy")
+def privacy():
+    """Public privacy policy (needed by Google for the Drive connection)."""
+    return render_template("privacy.html", terms=False)
+
+
+@app.route("/terms")
+def terms():
+    return render_template("privacy.html", terms=True)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     """Entry page with the three separate sections."""
