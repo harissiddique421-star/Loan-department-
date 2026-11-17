@@ -3209,6 +3209,9 @@ def _put_db_file(client, folder, name, data, mime, kind, existing=None):
     db.session.commit()
     try:
         _upload_verified(client, row, data, mime, folder, {"tooba": "1", "kind": kind}, existing_id=existing)
+        if existing:                          # same Drive file, new content: older rows no longer describe it
+            (ArchiveFile.query.filter(ArchiveFile.drive_file_id == row.drive_file_id, ArchiveFile.id != row.id)
+             .update({"status": "superseded"}, synchronize_session=False))
     except Exception as exc:
         db.session.rollback()
         row = db.session.get(ArchiveFile, row.id)
@@ -3284,6 +3287,14 @@ def verify_archive(write_report=True):
     rep = {"checked_at": pk_now().strftime("%Y-%m-%d %H:%M"), "missing": [], "corrupt": [], "duplicates": [],
            "untracked": []}
     tracked = set()
+    # a "latest" file is one Drive file updated in place: only its newest row describes it now
+    newest = dict(db.session.query(ArchiveFile.drive_file_id, func.max(ArchiveFile.id))
+                  .filter(ArchiveFile.drive_file_id.isnot(None)).group_by(ArchiveFile.drive_file_id).all())
+    for r in ArchiveFile.query.filter(ArchiveFile.status.in_(("verified", "missing", "corrupt")),
+                                      ArchiveFile.drive_file_id.isnot(None)):
+        if newest.get(r.drive_file_id) != r.id:
+            r.status = "superseded"
+    db.session.commit()
     last = 0
     while True:                                       # every archived file, page by page
         rows = (ArchiveFile.query.filter(ArchiveFile.id > last, ArchiveFile.status == "verified")
