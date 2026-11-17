@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ 'Terms of Use' if terms else 'Privacy Policy' }} — Tooba Foundation Loan Department</title>
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;margin:0 auto;padding:32px 18px;color:#1d2a22;line-height:1.6;background:#fff}
+h1{color:#0e7a36;font-size:26px}h2{font-size:18px;margin-top:26px}a{color:#0e7a36}small{color:#66766c}</style></head>
+<body>
+<h1>Tooba Foundation — Loan Department<br>{{ 'Terms of Use' if terms else 'Privacy Policy' }}</h1>
+<p><small>Last updated: 17 November 2026</small></p>
+{% if terms %}
+<p>This website is the internal loan application system of The Tooba Foundation (Plot# 201, Al-Mustafa Road, Block "L" Sector 11, Orangi Town, Karachi). It may be used only by staff, reviewers and administrators who were given a login by the Foundation.</p>
+<h2>Use</h2>
+<p>Users must keep their login private, enter only true information about applicants, and use the system only for the Foundation's interest-free loan work. Every change is recorded in an audit log.</p>
+<h2>Google Drive</h2>
+<p>An administrator may connect the Foundation's own Google account so the system can save backup copies (application forms and database backups) into that account's Google Drive. The connection can be removed at any time from the Backup &amp; Recovery page or from the Google account's security settings.</p>
+<h2>Contact</h2>
+<p>toobafoundation2122@gmail.com</p>
+{% else %}
+<p>The Tooba Foundation runs this website to process interest-free loan applications. This page explains what information it keeps and how it is protected.</p>
+<h2>Information we keep</h2>
+<p>Details that applicants give on the loan form (name, father/husband name, CNIC, phone numbers, address, business, income and expenses, guarantor details), their photos and CNIC pictures and other uploaded documents, loan and disbursement records, and the names and actions of the staff who use the system.</p>
+<h2>How it is used</h2>
+<p>Only to assess, approve, disburse and track interest-free loans, and to keep the Foundation's records. It is never sold, never used for advertising and never shared with anyone outside the Foundation unless the law requires it.</p>
+<h2>Where it is stored</h2>
+<p>In the Foundation's private database (Supabase). Backup copies — filled application forms in Microsoft Word format and complete database backups — are saved in the Foundation's own Google Drive account.</p>
+<h2>Google account access</h2>
+<p>When an administrator connects Google Drive, the system asks only for permission to create and manage the files it makes itself (the <code>drive.file</code> permission) and to know the connected email address. It cannot see any other files in that Google Drive. The sign-in token is kept encrypted on the server and is never shown in any web page. Google user data is used only to store and check these backups, is not shared with anyone, and is not used for any other purpose. Use of information received from Google APIs follows the Google API Services User Data Policy, including the Limited Use requirements. Access can be removed at any time from the Backup &amp; Recovery page or at myaccount.google.com/permissions.</p>
+<h2>Security</h2>
+<p>Only logged-in staff can see application data, each according to their role. Passwords are stored hashed, connections use HTTPS, and every change is recorded in an audit log.</p>
+<h2>Your rights</h2>
+<p>Applicants may ask the Foundation to see or correct their information.</p>
+<h2>Contact</h2>
+<p>The Tooba Foundation, Plot# 201, Al-Mustafa Road, Block "L" Sector 11, Orangi Town, Karachi · toobafoundation2122@gmail.com</p>
+{% endif %}
+<p><a href="{{ url_for('privacy') }}">Privacy Policy</a> · <a href="{{ url_for('terms') }}">Terms of Use</a> · <a href="{{ url_for('login') }}">Staff login</a></p>
+</body></html>
