@@ -48,7 +48,7 @@
     <button class="btn small light" name="action" value="weekly" {% if not configured %}disabled{% endif %}>{{ icon('files') }} Weekly full archive now</button>
   </form>
   <p style="margin-top:10px"><a class="btn small light" href="{{ url_for('backup_recovery_download') }}">{{ icon('download') }} Download Complete Backup</a></p>
-  <p class="muted">Download: JSON (har table, har document, asal IDs) + CSV + Excel ek zip mein. Last database backup on Drive: {{ pkt(last_db.started_at) if last_db else '—' }}{% if last_db %} ({{ last_db.kind }}){% endif %}.</p>
+  <p class="muted">Download: JSON (har table, har document, asal IDs) + CSV + Excel ek zip mein. Roz ke backup folder mein har applicant ka poora bhara hua Word form bhi (<code>Tooba Word Forms …zip</code>). Last database backup on Drive: {{ pkt(last_db.started_at) if last_db else '—' }}{% if last_db %} ({{ last_db.kind }}){% endif %}.</p>
   <p class="muted">Automatic: har save / status change ke foran baad; har raat retry + verification; har raat poora database backup; har Itwaar full archive.</p>
 </section>
 </div>

@@ -198,12 +198,19 @@ def test_daily_and_weekly_backup_and_dashboard(admin, staff, drive):
     payload = db_export.load(js["data"])
     assert any(a["applicant_name"] == "Backup Person" for a in payload["tables"]["application"])
     assert all("password_hash" not in u for u in payload["tables"]["user"])
+    wf = next(f for f in daily if f["name"].startswith("Tooba Word Forms"))
+    with zipfile.ZipFile(io.BytesIO(wf["data"])) as z:
+        forms = [n for n in z.namelist() if n.endswith(".docx") and not n.startswith("Guarantors/")]
+        hit = next(n for n in forms if "Backup Person" in n)
+        assert not word_form.verify(z.read(hit), hit.split(" - ")[0], {"name": "Backup Person"})
+        assert any(n.startswith("Guarantors/") for n in z.namelist())
     assert drive.in_folder("Complete Database Backup")
     r = admin.post("/admin/backup-recovery/run", data={"action": "weekly"})
     wk = drive.in_folder("Weekly Backups")
     assert len(wk) == 1 and wk[0]["name"].endswith(".zip")
     with zipfile.ZipFile(io.BytesIO(wk[0]["data"])) as z:
         assert "database.json.gz" in z.namelist() and "archive-manifest.json" in z.namelist()
+        assert "Word Forms.zip" in z.namelist()
     page = admin.get("/admin/backup-recovery")
     assert page.status_code == 200 and b"Backup Now" in page.data and b"Connected" in page.data
     assert staff.get("/admin/backup-recovery").status_code in (302, 403)

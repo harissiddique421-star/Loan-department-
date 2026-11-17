@@ -3161,6 +3161,40 @@ def _db_files(stamp):
             (f"Tooba Database {stamp}.xlsx", db_export.xlsx(payload), drive_archive.XLSX_MIME)], payload
 
 
+def _word_forms_zip(stamp, page_size=200):
+    """Every application that has anything filled in, as its complete filled Word form plus its
+    guarantor file, in one zip (deleted ones too, marked). Returns (bytes, count, problems)."""
+    z, count, problems, last = io.BytesIO(), 0, [], 0
+    with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+        while True:
+            page = (Application.query.filter(Application.id > last).order_by(Application.id)
+                    .limit(page_size).all())
+            if not page:
+                break
+            for a in page:
+                if _is_empty_draft(a):
+                    continue
+                try:
+                    version = (db.session.query(func.max(ArchiveFile.version))
+                               .filter(ArchiveFile.application_id == a.id, ArchiveFile.category == "version")
+                               .scalar() or a.version or 1)
+                    rec = archive_record(a, version)
+                    person = _safe_name(a.applicant_name or rec["values"].get("name"))
+                    prefix = "Deleted applications/" if a.deleted_at else ""
+                    zf.writestr(f"{prefix}{a.app_id} - {person}.docx", word_form.build(rec))
+                    zf.writestr(f"{prefix}Guarantors/{a.app_id} - Guarantors - {person}.docx",
+                                word_form.build_guarantors(rec))
+                    count += 1
+                except Exception as exc:
+                    problems.append(f"{a.app_id}: {type(exc).__name__}: {str(exc)[:200]}")
+            last = page[-1].id
+        zf.writestr("README.txt", f"Tooba Loan Department - complete filled Word forms, {stamp}.\n"
+                    f"{count} applications. One file per applicant (application form, all pages, CNIC "
+                    "pictures and complete record), plus the guarantor file in Guarantors/.\n"
+                    + ("Problems:\n" + "\n".join(problems) if problems else ""))
+    return z.getvalue(), count, problems
+
+
 def _manifest():
     return [{"id": f.id, "application_id": f.application_id, "document_id": f.document_id,
              "category": f.category, "version": f.version, "name": f.name, "drive_file_id": f.drive_file_id,
@@ -3192,6 +3226,7 @@ def database_backup(weekly=False):
     now = pk_now()
     files, payload = _db_files(now.strftime("%Y-%m-%d"))
     counts = {t: len(r) for t, r in payload["tables"].items()}
+    forms, nforms, form_problems = _word_forms_zip(now.strftime("%Y-%m-%d"))
     if weekly:
         y, w, _ = now.isocalendar()
         label = f"{y}-W{w:02d}"
@@ -3200,17 +3235,22 @@ def database_backup(weekly=False):
         with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
             for name, data, _ in files:
                 zf.writestr(("database.json.gz" if name.endswith(".json.gz") else name), data)
+            zf.writestr("Word Forms.zip", forms)
             zf.writestr("archive-manifest.json", json.dumps(_manifest(), ensure_ascii=False, indent=1))
             zf.writestr("README.txt", "Tooba Loan Department weekly full archive.\n"
                         "database.json.gz holds every table and every uploaded document (original IDs).\n"
+                        "Word Forms.zip holds the complete filled Word form of every application.\n"
                         "archive-manifest.json lists every Word form / document file in the Drive archive.\n"
                         "Restore with: python restore_backup.py <this zip> <NEW database URL>\n")
         _put_db_file(client, folder, f"Tooba Full Archive {label}.zip", z.getvalue(), "application/zip", "weekly")
-        _log_run("weekly", True, {"counts": counts}, f"Weekly full archive {label} saved")
+        _log_run("weekly", not form_problems, {"counts": counts, "word_forms": nforms, "problems": form_problems},
+                 f"Weekly full archive {label} saved ({nforms} Word forms)"
+                 + (f"; Word form problems: {'; '.join(form_problems)[:600]}" if form_problems else ""))
         return label
     folder = subfolder(client, folders, "Daily Backups", now.strftime("%Y-%m-%d"))
     for name, data, mime in files:
         _put_db_file(client, folder, name, data, mime, "daily")
+    _put_db_file(client, folder, f"Tooba Word Forms {now.strftime('%Y-%m-%d')}.zip", forms, "application/zip", "daily")
     # newest copy in "Complete Database Backup" (same file updated; Drive keeps earlier revisions)
     for name, data, mime in files:
         latest = name.replace(now.strftime("%Y-%m-%d"), "- latest")
@@ -3224,7 +3264,9 @@ def database_backup(weekly=False):
             row = _put_db_file(client, folders["Complete Database Backup"], latest, data, mime, "latest")
         set_archive_setting(key, row.drive_file_id)
         db.session.commit()
-    _log_run("daily", True, {"counts": counts}, "Daily complete database backup saved")
+    _log_run("daily", not form_problems, {"counts": counts, "word_forms": nforms, "problems": form_problems},
+             f"Daily complete database backup saved, with {nforms} filled Word forms"
+             + (f"; Word form problems: {'; '.join(form_problems)[:600]}" if form_problems else ""))
     return counts
 
 
