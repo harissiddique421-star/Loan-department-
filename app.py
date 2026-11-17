@@ -2921,7 +2921,8 @@ def _upload_verified(client, row, data, mime, parent, props, existing_id=None):
     if existing_id:
         meta = client.update(existing_id, data, mime, name=row.name)
     else:
-        meta = client.upload(row.name, data, mime, parent, props)
+        meta = client.upload(row.name, data, mime, parent, props,
+                             lock=(props or {}).get("kind") not in ("form", "guarantor", "latest"))
     row.drive_file_id, row.drive_folder_id = meta.get("id"), parent
     row.uploaded_at = datetime.utcnow()
     got = meta.get("md5Checksum")
@@ -3285,7 +3286,13 @@ def verify_archive(write_report=True):
     folders = archive_folders(client, check=True)
     drive = {f["id"]: f for f in client.list_archive()}
     rep = {"checked_at": pk_now().strftime("%Y-%m-%d %H:%M"), "missing": [], "corrupt": [], "duplicates": [],
-           "untracked": []}
+           "untracked": [], "edited_database_copies": []}
+    # a dated database copy that someone opened and saved in Drive: the data itself is in the other
+    # copies (json / csv / later days), so it is reported, not treated as a broken application archive
+    for r in ArchiveFile.query.filter(ArchiveFile.status == "corrupt",
+                                      ArchiveFile.category.in_(("database", "report"))):
+        r.status = "edited"
+    db.session.commit()
     tracked = set()
     # a "latest" file is one Drive file updated in place: only its newest row describes it now
     newest = dict(db.session.query(ArchiveFile.drive_file_id, func.max(ArchiveFile.id))
@@ -3310,8 +3317,13 @@ def verify_archive(write_report=True):
                 r.status, r.last_error = "missing", "not found in Drive during verification"
                 rep["missing"].append(r.name)
             elif r.md5 and f.get("md5Checksum") and f["md5Checksum"] != r.md5:
-                r.status, r.last_error = "corrupt", "Drive content differs from what was uploaded"
-                rep["corrupt"].append(r.name)
+                if r.category in ("database", "report"):
+                    r.status = "edited"
+                    r.last_error = "changed in Google Drive after upload (opened and saved there)"
+                    rep["edited_database_copies"].append(r.name)
+                else:
+                    r.status, r.last_error = "corrupt", "Drive content differs from what was uploaded"
+                    rep["corrupt"].append(r.name)
         db.session.commit()
         last = rows[-1].id
     groups = {}
@@ -3344,6 +3356,8 @@ def verify_archive(write_report=True):
     _log_run("verify", rep["ok"], rep,
              f"{rep['applications_with_form_in_drive']}/{total - rep['empty_drafts']} applications in Drive; "
              f"{len(rep['missing'])} missing, {len(rep['corrupt'])} changed, {len(rep['duplicates'])} duplicates, "
+             + (f"{len(rep['edited_database_copies'])} database copies edited in Drive, "
+                if rep["edited_database_copies"] else "") +
              f"{rep['pending']} pending, {rep['failed']} failed")
     return rep
 
