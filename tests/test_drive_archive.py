@@ -205,6 +205,11 @@ def test_daily_and_weekly_backup_and_dashboard(admin, staff, drive):
         assert not word_form.verify(z.read(hit), hit.split(" - ")[0], {"name": "Backup Person"})
         assert any(n.startswith("Guarantors/") for n in z.namelist())
     assert drive.in_folder("Complete Database Backup")
+    new_app(staff, name="Second Person", cnic="4210166666666", complete=False)
+    admin.post("/admin/backup-recovery/run", data={"action": "backup"})     # "latest" files updated in place
+    with appmod.app.app_context():
+        rep = appmod.verify_archive()
+    assert rep["corrupt"] == [] and rep["missing"] == []
     r = admin.post("/admin/backup-recovery/run", data={"action": "weekly"})
     wk = drive.in_folder("Weekly Backups")
     assert len(wk) == 1 and wk[0]["name"].endswith(".zip")
