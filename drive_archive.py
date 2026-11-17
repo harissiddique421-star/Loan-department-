@@ -206,9 +206,14 @@ class ArchiveDrive:
         return f"https://drive.google.com/drive/folders/{folder_id}"
 
     # ---- files
-    def upload(self, name, data, mime, parent, props=None):
-        """Create a new file. Returns its metadata (id, md5Checksum, size...)."""
+    def upload(self, name, data, mime, parent, props=None, lock=False):
+        """Create a new file. Returns its metadata (id, md5Checksum, size...).
+        lock=True makes it read-only in Drive (the owner can still unlock it), so a backup copy is not
+        changed by opening and saving it there."""
         meta = {"name": name, "parents": [parent], "mimeType": mime}
+        if lock:
+            meta["contentRestrictions"] = [{"readOnly": True,
+                                            "reason": "Tooba backup copy - kept exactly as saved"}]
         if props:
             meta["appProperties"] = {k: str(v) for k, v in props.items()}
         if len(data) > RESUMABLE_OVER:

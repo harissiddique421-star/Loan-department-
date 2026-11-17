@@ -43,11 +43,11 @@ class FakeDrive:
                 "size": str(len(f["data"])), "trashed": f.get("trashed", False), "appProperties": f.get("props"),
                 "parents": [f["parent"]]}
 
-    def upload(self, name, data, mime, parent, props=None):
+    def upload(self, name, data, mime, parent, props=None, lock=False):
         self._maybe_fail()
         fid = self._id()
         self.files[fid] = {"id": fid, "name": name, "parent": parent, "folder": False, "data": data, "mime": mime,
-                           "props": {k: str(v) for k, v in (props or {}).items()}}
+                           "props": {k: str(v) for k, v in (props or {}).items()}, "locked": lock}
         return self._meta(self.files[fid])
 
     def update(self, file_id, data, mime, name=None):
@@ -209,7 +209,15 @@ def test_daily_and_weekly_backup_and_dashboard(admin, staff, drive):
     admin.post("/admin/backup-recovery/run", data={"action": "backup"})     # "latest" files updated in place
     with appmod.app.app_context():
         rep = appmod.verify_archive()
-    assert rep["corrupt"] == [] and rep["missing"] == []
+    assert rep["corrupt"] == [] and rep["missing"] == [] and rep["ok"]
+    daily = drive.in_folder("Daily Backups")
+    assert all(f["locked"] for f in daily)                       # dated copies are read-only in Drive
+    assert not any(f["locked"] for f in drive.in_folder("Complete Database Backup"))
+    xl = next(f for f in daily if f["name"].endswith(".xlsx"))
+    drive.files[xl["id"]]["data"] = b"opened and saved in Drive"   # owner unlocked and edited it
+    with appmod.app.app_context():
+        rep = appmod.verify_archive()
+    assert rep["edited_database_copies"] == [xl["name"]] and rep["corrupt"] == [] and rep["ok"]
     r = admin.post("/admin/backup-recovery/run", data={"action": "weekly"})
     wk = drive.in_folder("Weekly Backups")
     assert len(wk) == 1 and wk[0]["name"].endswith(".zip")
