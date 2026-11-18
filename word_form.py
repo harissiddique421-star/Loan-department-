@@ -84,13 +84,13 @@ CNICS = [
     ("g2cnic", (1506, 1548), 30, _G_EDGES),
 ]
 IMAGES = [("photo", 1, (539, 314, 724, 519)),
-          ("photo", 2, (137, 428, 266, 539)), ("famPhoto", 2, (137, 566, 266, 683)),
+          ("photo", 2, (137, 428, 316, 539)), ("famPhoto", 2, (137, 566, 316, 683)),
           ("g1Photo", 2, (138, 855, 274, 1016)),
           ("g2Photo", 2, (138, 1079, 274, 1240))]
 LINE_GAP = 5
 # Printed label + underline that the scanned page lacks (same as LABELS / RULES in loanform.js)
 LABELS = [(1, "مادری زبان :", (560, 1003, 712, 1055), 25)]
-RULES = [(1, (290, 1055, 554, 1058)), (2, (269, 425, 272, 542)), (2, (269, 563, 272, 686))]
+RULES = [(1, (290, 1055, 554, 1058)), (2, (319, 425, 322, 542)), (2, (319, 563, 322, 686))]
 
 
 def printed_value(values, fid):
@@ -189,7 +189,7 @@ def _fit_size(text, fs_px, width_px):
 
 
 def _cover(data, w, h):
-    """Crop a photo to the box's shape (CSS object-fit: cover). Returns JPEG/PNG bytes."""
+    """Crop a photo to the box's shape (CSS object-fit: cover; object-position 50% 20%). Returns JPEG bytes."""
     from PIL import Image
     im = Image.open(io.BytesIO(data))
     im.load()
@@ -204,7 +204,8 @@ def _cover(data, w, h):
         im = im.crop(((iw - nw) // 2, 0, (iw - nw) // 2 + nw, ih))
     else:
         nh = int(iw / want)
-        im = im.crop((0, (ih - nh) // 2, iw, (ih - nh) // 2 + nh))
+        top = (ih - nh) // 5            # keep the face: crop more from the bottom than the top
+        im = im.crop((0, top, iw, top + nh))
     im.thumbnail((900, 900))
     out = io.BytesIO()
     im.convert("RGB").save(out, "JPEG", quality=88)

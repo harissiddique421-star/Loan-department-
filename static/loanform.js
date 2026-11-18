@@ -59,8 +59,8 @@ const LABELS = [
 const RULES = [
   { page: 1, r: [290, 1055, 554, 1058] },
   // Page 2: split each thumb box so the photo sits on its left side
-  { page: 2, r: [269, 425, 272, 542] },
-  { page: 2, r: [269, 563, 272, 686] },
+  { page: 2, r: [319, 425, 322, 542] },
+  { page: 2, r: [319, 563, 322, 686] },
 ];
 const URDU_FONT = "'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', serif";
 
@@ -79,8 +79,8 @@ const CNICS = [
 const IMAGES = [
   { id: 'photo',   page: 1, fit: 'cover', r: [539, 314, 724, 519] },
   // Page 2, beside the thumb boxes: applicant (same picture as page 1) and family member
-  { id: 'photo',    page: 2, fit: 'cover', r: [137, 428, 266, 539] },
-  { id: 'famPhoto', page: 2, fit: 'cover', r: [137, 566, 266, 683] },
+  { id: 'photo',    page: 2, fit: 'cover', r: [137, 428, 316, 539] },
+  { id: 'famPhoto', page: 2, fit: 'cover', r: [137, 566, 316, 683] },
   { id: 'g1Photo', page: 2, fit: 'cover', r: [138, 855, 274, 1016] },
   { id: 'g2Photo', page: 2, fit: 'cover', r: [138, 1079, 274, 1240] },
 ];
@@ -259,7 +259,7 @@ function renderPage(p, SCALE) {
     const [x0, y0, x1, y1] = m.r, bw = x1 - x0, bh = y1 - y0;
     const iw = im.naturalWidth, ih = im.naturalHeight;
     const s = Math.max(bw / iw, bh / ih), sw = bw / s, sh = bh / s;
-    ctx.drawImage(im, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x0, y0, bw, bh);
+    ctx.drawImage(im, (iw - sw) / 2, (ih - sh) * 0.2, sw, sh, x0, y0, bw, bh);   // keep the face (CSS 50% 20%)
   });
   ctx.fillStyle = '#111';
   RULES.filter(r => r.page === p).forEach(r => ctx.fillRect(r.r[0], r.r[1], r.r[2] - r.r[0], r.r[3] - r.r[1]));
