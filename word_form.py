@@ -511,6 +511,9 @@ def build_guarantors(record):
         pics = [(f"Guarantor {n} photo", photos.get(f"g{n}Photo"))]
         w = witness.get(wkey) or {}
         pics += [(f"CNIC front", w.get("front")), (f"CNIC back", w.get("back"))]
+        fam = witness.get(wkey + "fam")
+        if fam:
+            pics += [("Family member CNIC front", fam.get("front")), ("Family member CNIC back", fam.get("back"))]
         for label, data in pics:
             p = doc.add_paragraph()
             p.add_run(label + ": ").bold = True

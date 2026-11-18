@@ -26,7 +26,7 @@ An online loan application system. Staff log in with a username and password, fi
   - JSON backup
   - delete applications
 
-- **CNIC DOCUMENTS page**: after the 3 original pages, Print / PDF adds ONE page with Applicant, First Witness and Second Witness CNIC (front + back, mandatory to submit) and Family Member CNIC only when the reviewer marks it required.
+- **CNIC DOCUMENTS page**: after the 3 original pages, Print / PDF adds ONE page with Applicant, First Witness and Second Witness CNIC (front + back, mandatory to submit), an optional Family Member CNIC under each witness (printed only once uploaded), and Family Member CNIC only when the reviewer marks it required.
 - **Disbursement sheets** (*Disbursement* menu): numbered sheets (154th, 155th…) with the 12 columns of the foundation's sheet, photos, totals, the Disbursement Report (fee-wise and purpose-wise) and signature lines; prints on A4 landscape and downloads as Excel. Only approved applications can be added, each only once. Cheque numbers (Pending / Issued / Cleared / Cancelled, never duplicated, history kept) can be entered by Reviewers. Admin closes a sheet to freeze it and can reopen it with a reason.
 - **Google Sheets**: one master spreadsheet per year (12 month tabs + Yearly Summary), rewritten from the database after every change — no duplicate rows. Supabase stays the main record; if Google is down the website keeps working and a daily job retries. Setup is on *Admin → Google Sheets*.
 - **Reports**: monthly / yearly applications, staff-wise, reviewer-wise, purpose-wise and fee-wise, approved / rejected / pending / disbursed totals, with CSV export.

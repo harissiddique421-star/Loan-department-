@@ -213,8 +213,14 @@ ACTION_LABELS = {
 }
 
 # Single combined CNIC DOCUMENTS page: (group, section title, form field holding the name)
-CNIC_GROUPS = [("app", "Applicant CNIC", "name"), ("w1", "First Witness CNIC", "g1name"),
-               ("w2", "Second Witness CNIC", "g2name"), ("fam", "Family Member CNIC", None)]
+CNIC_GROUPS = [("app", "Applicant CNIC", "name"),
+               ("w1", "First Witness CNIC", "g1name"),
+               ("w1fam", "First Witness — Family Member CNIC", None),
+               ("w2", "Second Witness CNIC", "g2name"),
+               ("w2fam", "Second Witness — Family Member CNIC", None),
+               ("fam", "Family Member CNIC", None)]
+# Always optional: shown under each witness, printed only once a picture is uploaded.
+OPTIONAL_CNIC_GROUPS = {"w1fam", "w2fam"}
 CNIC_KINDS = [f"cnic_{g}_{side}" for g, _, _ in CNIC_GROUPS for side in ("front", "back")]
 CNIC_LABELS = {f"cnic_{g}_{side}": f"{title} — {side.title()} Side"
                for g, title, _ in CNIC_GROUPS for side in ("front", "back")}
@@ -1186,7 +1192,18 @@ def form_payload(a, with_cnic=False):
 
 
 def cnic_groups_for(a):
-    return [grp for grp in CNIC_GROUPS if grp[0] != "fam" or a.family_cnic_required]
+    """Groups printed / archived: Family Member only when required, the witnesses' family
+    member CNICs only when at least one side has been uploaded."""
+    have = {d.kind for d in a.active_docs().all()}
+    out = []
+    for grp in CNIC_GROUPS:
+        g = grp[0]
+        if g == "fam" and not a.family_cnic_required:
+            continue
+        if g in OPTIONAL_CNIC_GROUPS and not ({f"cnic_{g}_front", f"cnic_{g}_back"} & have):
+            continue
+        out.append(grp)
+    return out
 
 
 def cnic_page_rows(a):
@@ -1203,7 +1220,8 @@ def cnic_page_rows(a):
 
 
 def required_kinds(a):
-    return [f"cnic_{g}_{side}" for g, _, _ in cnic_groups_for(a) for side in ("front", "back")]
+    return [f"cnic_{g}_{side}" for g, _, _ in cnic_groups_for(a) if g not in OPTIONAL_CNIC_GROUPS
+            for side in ("front", "back")]
 
 
 def submit_problems(a):
