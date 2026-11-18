@@ -58,6 +58,9 @@ const LABELS = [
 ];
 const RULES = [
   { page: 1, r: [290, 1055, 554, 1058] },
+  // Page 2: split each thumb box so the photo sits on its left side
+  { page: 2, r: [269, 425, 272, 542] },
+  { page: 2, r: [269, 563, 272, 686] },
 ];
 const URDU_FONT = "'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', serif";
 
@@ -75,6 +78,9 @@ const CNICS = [
 /* Photo boxes on the pages. Ids match PHOTO_SLOTS in form_fields.py. */
 const IMAGES = [
   { id: 'photo',   page: 1, fit: 'cover', r: [539, 314, 724, 519] },
+  // Page 2, beside the thumb boxes: applicant (same picture as page 1) and family member
+  { id: 'photo',    page: 2, fit: 'cover', r: [137, 428, 266, 539] },
+  { id: 'famPhoto', page: 2, fit: 'cover', r: [137, 566, 266, 683] },
   { id: 'g1Photo', page: 2, fit: 'cover', r: [138, 855, 274, 1016] },
   { id: 'g2Photo', page: 2, fit: 'cover', r: [138, 1079, 274, 1240] },
 ];
@@ -159,7 +165,7 @@ function buildOverlay() {
     img.alt = '';
     box.appendChild(img);
     previews[m.page].appendChild(box);
-    picEls[m.id] = box;
+    (picEls[m.id] = picEls[m.id] || []).push(box);   // one picture can be printed in two places
   });
 }
 
@@ -189,9 +195,7 @@ function showImage(id, url) {
     const img = new Image();
     img.onload = () => {
       imgData[id] = img;
-      const box = picEls[id];
-      box.querySelector('img').src = url;
-      box.style.display = 'block';
+      picEls[id].forEach(box => { box.querySelector('img').src = url; box.style.display = 'block'; });
       const t = document.getElementById('thumb_' + id);
       if (t) { t.innerHTML = ''; const ti = document.createElement('img'); ti.src = url; t.appendChild(ti); }
       const card = document.getElementById('card_' + id);
@@ -205,9 +209,7 @@ function showImage(id, url) {
 
 function removeImage(id) {
   delete imgData[id]; delete pending[id];
-  const box = picEls[id];
-  box.style.display = 'none';
-  box.querySelector('img').removeAttribute('src');
+  picEls[id].forEach(box => { box.style.display = 'none'; box.querySelector('img').removeAttribute('src'); });
   const inp = document.getElementById('file_' + id); if (inp) inp.value = '';
   const t = document.getElementById('thumb_' + id); if (t) t.textContent = 'No image';
   const card = document.getElementById('card_' + id); if (card) card.classList.remove('has');
@@ -384,14 +386,14 @@ function clearAll() {
   if (!window.confirm('Saari fields aur pictures khaali kar dein? (Save dabane tak purana data mehfooz hai)')) return;
   form.querySelectorAll('.grid input:not([type=file])').forEach(i => { i.value = ''; });
   form.querySelectorAll('.grid select[data-other]').forEach(s => { s.value = ''; toggleOther(s); });
-  IMAGES.forEach(m => removeImage(m.id));
+  Object.keys(picEls).forEach(removeImage);
   updatePreview();
 }
 
 /* ---------- wire up ---------- */
 buildOverlay();
 updatePreview();
-const loads = IMAGES.filter(m => PAYLOAD.photos && PAYLOAD.photos[m.id]).map(m => showImage(m.id, PAYLOAD.photos[m.id]));
+const loads = Object.keys(picEls).filter(id => PAYLOAD.photos && PAYLOAD.photos[id]).map(id => showImage(id, PAYLOAD.photos[id]));
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(updatePreview);
 window.addEventListener('resize', updatePreview);
 

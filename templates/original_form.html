@@ -44,7 +44,7 @@
     {% endif %}
     {% endfor %}
     {% if loop.index == 3 %}
-    {% for page, slot_title, slot_note in [(1, 'Applicant Photo', 'Page 1'), (2, 'Guarantor Photos (ضمانتی کی تصویر)', 'Page 2 · signature & thumb are put by hand after printing')] %}
+    {% for page, slot_title, slot_note in [(1, 'Applicant Photo', 'Page 1'), (2, 'Family Member & Guarantor Photos', 'Page 2 · applicant photo also prints here · signature & thumb are put by hand after printing')] %}
     <div class="sec">{{ slot_title }} <small>— {{ slot_note }}</small></div>
     <div class="uploads">
       {% for kind, en, ur, pg in PHOTO_SLOTS if pg == page %}

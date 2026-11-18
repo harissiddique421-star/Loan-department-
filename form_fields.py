@@ -69,6 +69,7 @@ OTHER_OF = {
 # Pictures printed on the form: (kind, English label, Urdu label, page)
 PHOTO_SLOTS = [
     ("photo", "Applicant Photo", "درخواست گزار کی تصویر", 1),
+    ("famPhoto", "Family Member Photo", "فیملی ممبر کی تصویر", 2),
     ("g1Photo", "Guarantor 1 Photo", "تصویر ضمانتی 1", 2),
     ("g2Photo", "Guarantor 2 Photo", "تصویر ضمانتی 2", 2),
 ]

@@ -83,12 +83,14 @@ CNICS = [
     ("g1cnic", (1276, 1319), 30, _G_EDGES),
     ("g2cnic", (1506, 1548), 30, _G_EDGES),
 ]
-IMAGES = [("photo", 1, (539, 314, 724, 519)), ("g1Photo", 2, (138, 855, 274, 1016)),
+IMAGES = [("photo", 1, (539, 314, 724, 519)),
+          ("photo", 2, (137, 428, 266, 539)), ("famPhoto", 2, (137, 566, 266, 683)),
+          ("g1Photo", 2, (138, 855, 274, 1016)),
           ("g2Photo", 2, (138, 1079, 274, 1240))]
 LINE_GAP = 5
 # Printed label + underline that the scanned page lacks (same as LABELS / RULES in loanform.js)
 LABELS = [(1, "مادری زبان :", (560, 1003, 712, 1055), 25)]
-RULES = [(1, (290, 1055, 554, 1058))]
+RULES = [(1, (290, 1055, 554, 1058)), (2, (269, 425, 272, 542)), (2, (269, 563, 272, 686))]
 
 
 def printed_value(values, fid):
