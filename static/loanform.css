@@ -47,7 +47,7 @@
 .lf .pic{position:absolute;overflow:hidden;display:none}
 .lf .field.lbl{justify-content:flex-end;color:#222}
 .lf .rule{position:absolute;background:#111}
-.lf .pic img{display:block;width:100%;height:100%;object-fit:cover}
+.lf .pic img{display:block;width:100%;height:100%;object-fit:cover;object-position:50% 20%}
 @media (max-width:650px){.lf .grid{grid-template-columns:1fr}.lf .preview{width:100%}}
 @media print{
   @page{size:A4 portrait;margin:0}
