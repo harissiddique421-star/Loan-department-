@@ -428,3 +428,19 @@ def test_google_sheet_looks_like_printed_sheet(admin, staff, reviewer, appm, mon
     e = entry_of(appm, pk)
     admin.post(f"/disbursement/entry/{e}/remove", data={"reason": "test"})
     assert c.get(url).status_code == 404
+
+
+def test_witness_family_member_cnic_is_optional(staff, appm):
+    pk = new_app(staff, cnic="4210111100009")
+    page = text_of(staff.get(f"/application/{pk}"))
+    assert "First Witness — Family Member CNIC" in page and "Second Witness — Family Member CNIC" in page
+    # not uploaded: not printed, and submitting still works
+    payload = json.loads(text_of(staff.get(f"/application/{pk}/print")).split('id="formPayload">')[1].split("</script>")[0])
+    assert [r["title"] for r in payload["cnic"]] == ["APPLICANT CNIC", "FIRST WITNESS CNIC", "SECOND WITNESS CNIC"]
+    upload_kind(staff, pk, "cnic_w1fam_front")
+    payload = json.loads(text_of(staff.get(f"/application/{pk}/print")).split('id="formPayload">')[1].split("</script>")[0])
+    assert [r["title"] for r in payload["cnic"]] == ["APPLICANT CNIC", "FIRST WITNESS CNIC",
+                                                     "FIRST WITNESS — FAMILY MEMBER CNIC", "SECOND WITNESS CNIC"]
+    assert payload["cnic"][2]["front"] and payload["cnic"][2]["back"] is None
+    staff.post(f"/application/{pk}/status", data={"status": "Submitted"})
+    assert get_row(pk).status == "Submitted"

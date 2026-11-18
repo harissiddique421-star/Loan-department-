@@ -111,7 +111,7 @@
   <div class="cnic-grid">
   {% for g, title, name_field in CNIC_GROUPS if g != 'fam' or a.family_cnic_required or cnic_docs['cnic_fam_front'] or cnic_docs['cnic_fam_back'] %}
     <div class="cnic-row">
-      <b>{{ title }}{% if g == 'fam' and not a.family_cnic_required %} <span class="muted">(optional)</span>{% endif %}</b>
+      <b>{{ title }}{% if (g == 'fam' and not a.family_cnic_required) or g in ('w1fam', 'w2fam') %} <span class="muted">(optional)</span>{% endif %}</b>
       {% for side in ('front', 'back') %}{% set k = 'cnic_' ~ g ~ '_' ~ side %}{% set d = cnic_docs[k] %}
       <div class="cnic-slot{{ ' has' if d }}">
         <span class="cnic-side">{{ side|title }} Side</span>
