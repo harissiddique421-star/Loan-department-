@@ -58,7 +58,7 @@ FIELDS = [
     ("houseEdu", 1, "line", (726, 1011, 894, 1055), 28),
     ("relative1", 1, "line", (633, 1088, 1013, 1132), 30),
     ("relative2", 1, "line", (89, 1088, 458, 1132), 30),
-    ("language", 1, "line", (290, 1011, 592, 1055), 28),
+    ("language", 1, "line", (290, 1011, 554, 1055), 28),
     ("g1name", 1, "line", (657, 1194, 1111, 1238), 30),
     ("g1father", 1, "line", (92, 1194, 567, 1238), 30),
     ("g1phone", 1, "line", (96, 1264, 313, 1308), 28),
@@ -87,8 +87,8 @@ IMAGES = [("photo", 1, (539, 314, 724, 519)), ("g1Photo", 2, (138, 855, 274, 101
           ("g2Photo", 2, (138, 1079, 274, 1240))]
 LINE_GAP = 5
 # Printed label + underline that the scanned page lacks (same as LABELS / RULES in loanform.js)
-LABELS = [(1, "زبان :", (598, 1003, 676, 1055), 25)]
-RULES = [(1, (290, 1055, 592, 1058))]
+LABELS = [(1, "مادری زبان :", (560, 1003, 712, 1055), 25)]
+RULES = [(1, (290, 1055, 554, 1058))]
 
 
 def printed_value(values, fid):

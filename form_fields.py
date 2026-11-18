@@ -30,7 +30,7 @@ FORM_SECTIONS = [
         ("houseEdu", "Education (تعلیم)", "text"),
         ("relative1", "Nearest Masjid (قریب ترین مسجد)", "text"),
         ("relative2", "Nearest Shop (قریب ترین دکان)", "text"),
-        ("language", "Language (زبان)", "select"),
+        ("language", "Language (مادری زبان)", "select"),
         ("languageOther", "Other Language (دیگر زبان)", "other"),
     ]),
     ("Guarantor 1 (ضمانتی نمبر 1) — Page 1", [

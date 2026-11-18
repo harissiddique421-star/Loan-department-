@@ -32,7 +32,7 @@ const FIELDS = [
   { id: 'relative1',       type: 'line', r: [633, 1088, 1013, 1132], fs: 30 },
   { id: 'relative2',       type: 'line', r: [89, 1088, 458, 1132],  fs: 30 },
   // Language: the scanned page has no spot for it, so its label and underline are drawn too (LABELS)
-  { id: 'language',        type: 'line', r: [290, 1011, 592, 1055], fs: 28 },
+  { id: 'language',        type: 'line', r: [290, 1011, 554, 1055], fs: 28 },
   // Page 1 — Guarantor 1
   { id: 'g1name',          type: 'line', r: [657, 1194, 1111, 1238], fs: 30 },
   { id: 'g1father',        type: 'line', r: [92, 1194, 567, 1238],   fs: 30 },
@@ -54,10 +54,10 @@ const FIELDS = [
 
 /* Printed text and underlines that are not on the scanned page (drawn on screen, print and PDF). */
 const LABELS = [
-  { page: 1, text: 'زبان :', r: [598, 1003, 676, 1055], fs: 25 },
+  { page: 1, text: 'مادری زبان :', r: [560, 1003, 712, 1055], fs: 25 },
 ];
 const RULES = [
-  { page: 1, r: [290, 1055, 592, 1058] },
+  { page: 1, r: [290, 1055, 554, 1058] },
 ];
 const URDU_FONT = "'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', serif";
 

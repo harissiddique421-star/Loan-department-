@@ -22,7 +22,7 @@ def test_other_language_saved_and_shown(appm, admin, staff):
     vals = form_of(appm, pk)
     assert vals["language"] == "Other" and vals["languageOther"] == "Punjabi"
     page = admin.get(f"/application/{pk}").get_data(as_text=True)
-    assert "Language (زبان)" in page and "Other — Punjabi" in page
+    assert "Language (مادری زبان)" in page and "Other — Punjabi" in page
 
 
 def test_typed_language_dropped_unless_other(appm, staff):
@@ -44,5 +44,5 @@ def test_language_printed_on_word_form():
     data = word_form.build({"app_id": "TF-TEST", "values": {"name": "A", "language": "Other",
                                                              "languageOther": "Punjabi"}})
     xml = zipfile.ZipFile(io.BytesIO(data)).read("word/document.xml").decode()
-    assert "زبان :" in xml and ">Punjabi<" in xml
+    assert "مادری زبان :" in xml and ">Punjabi<" in xml
     assert word_form.verify(data, "TF-TEST", {"language": "Other", "languageOther": "Punjabi"}) == []
