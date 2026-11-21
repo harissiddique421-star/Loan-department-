@@ -1,4 +1,4 @@
-import os, json, secrets, csv, io, hashlib, hmac, zipfile, tempfile
+import os, time, json, secrets, csv, io, hashlib, hmac, zipfile, tempfile
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash, abort,
@@ -866,8 +866,26 @@ MIGRATION_PENDING = False
 PERF_DB = False            # set at startup when the performance migration is applied
 
 
+MIGRATION_RECHECK_SECONDS = 15
+_last_schema_check = 0.0
+
+
 @app.before_request
 def migration_gate():
+    global _last_schema_check
+    if MIGRATION_PENDING and request.endpoint != "static" and not USING_SQLITE:
+        # The flag is set when the server starts. A server that started before the migration
+        # was applied would otherwise keep this page until it restarts, so look again
+        # (at most every few seconds) and let the app run as soon as the database is ready.
+        now = time.monotonic()
+        if now - _last_schema_check >= MIGRATION_RECHECK_SECONDS:
+            _last_schema_check = now
+            try:
+                check_postgres_schema()
+                if not MIGRATION_PENDING:
+                    ensure_admin_user()
+            except Exception:
+                db.session.rollback()
     if MIGRATION_PENDING and request.endpoint != "static":
         return render_template("message.html", title="Database update pending",
                                msg="Database ka naya update abhi apply nahi hua. Admin se rabta karein."), 503
@@ -4382,40 +4400,49 @@ def sqlite_seed():
     db.session.commit()
 
 
+def check_postgres_schema():
+    """PostgreSQL schema changes are applied as reviewed migrations (supabase/migrations),
+    never automatically. Until the required ones are applied, show a maintenance page."""
+    global MIGRATION_PENDING, ARCHIVE_DB, PERF_DB
+    _insp = inspect(db.engine)
+    # every table the code needs; a missing one means a migration has not been applied yet
+    MIGRATION_PENDING = not all(_insp.has_table(t) for t in (
+        "audit_log", "role_permission", "disbursement_batch", "disbursement_entry", "cheque",
+        "gsheet_year", "gsheet_sync", "gsheet_sync_log")) or not any(
+        c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch")) or not any(
+        c["name"] == "forwarded_at" for c in _insp.get_columns("application"))
+    # Performance migration (20261107…) is optional: without it the app keeps the old
+    # (slower) search and simply does not cache.
+    # Drive archive migration (20261117…) is optional too: without it the archive stays off.
+    ARCHIVE_DB = all(_insp.has_table(t) for t in ARCHIVE_TABLES)
+    with db.engine.connect() as _c:
+        PERF_DB = bool(_c.execute(text(
+            "select count(*) = 2 from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
+            "where n.nspname = 'public' and p.proname in ('search_application_ids', 'data_version')")).scalar())
+
+
+def ensure_admin_user():
+    # Local SQLite only: without ADMIN_PASSWORD a random one is generated and printed once.
+    admin_pw = os.getenv("ADMIN_PASSWORD", "")
+    if not admin_pw and USING_SQLITE and not ON_VERCEL and not User.query.filter_by(role="Admin").first():
+        admin_pw = secrets.token_urlsafe(12)
+        print(f"[tooba] Local admin created: {os.getenv('ADMIN_USERNAME', 'admin')} / {admin_pw}")
+    if admin_pw and not User.query.filter_by(role="Admin").first():
+        admin = User(username=os.getenv("ADMIN_USERNAME", "admin"), role="Admin")
+        admin.set_password(admin_pw)
+        db.session.add(admin)
+        db.session.commit()
+
+
 with app.app_context():
     if USING_SQLITE:
         db.create_all()
         sqlite_add_missing_columns()
         sqlite_seed()
     else:
-        # PostgreSQL schema changes are applied as reviewed migrations (supabase/migrations),
-        # never automatically. Until the Phase 3 migration is applied, show a maintenance page.
-        _insp = inspect(db.engine)
-        # every table the code needs; a missing one means a migration has not been applied yet
-        MIGRATION_PENDING = not all(_insp.has_table(t) for t in (
-            "audit_log", "role_permission", "disbursement_batch", "disbursement_entry", "cheque",
-            "gsheet_year", "gsheet_sync", "gsheet_sync_log")) or not any(
-            c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch")) or not any(
-            c["name"] == "forwarded_at" for c in _insp.get_columns("application"))
-        # Performance migration (20261107…) is optional: without it the app keeps the old
-        # (slower) search and simply does not cache.
-        # Drive archive migration (20261117…) is optional too: without it the archive stays off.
-        ARCHIVE_DB = all(_insp.has_table(t) for t in ARCHIVE_TABLES)
-        with db.engine.connect() as _c:
-            PERF_DB = bool(_c.execute(text(
-                "select count(*) = 2 from pg_proc p join pg_namespace n on n.oid = p.pronamespace "
-                "where n.nspname = 'public' and p.proname in ('search_application_ids', 'data_version')")).scalar())
+        check_postgres_schema()
     if not MIGRATION_PENDING:
-        # Local SQLite only: without ADMIN_PASSWORD a random one is generated and printed once.
-        admin_pw = os.getenv("ADMIN_PASSWORD", "")
-        if not admin_pw and USING_SQLITE and not ON_VERCEL and not User.query.filter_by(role="Admin").first():
-            admin_pw = secrets.token_urlsafe(12)
-            print(f"[tooba] Local admin created: {os.getenv('ADMIN_USERNAME', 'admin')} / {admin_pw}")
-        if admin_pw and not User.query.filter_by(role="Admin").first():
-            admin = User(username=os.getenv("ADMIN_USERNAME", "admin"), role="Admin")
-            admin.set_password(admin_pw)
-            db.session.add(admin)
-            db.session.commit()
+        ensure_admin_user()
     db.session.remove()
 
 if __name__ == "__main__":
