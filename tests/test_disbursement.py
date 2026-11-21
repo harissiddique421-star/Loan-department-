@@ -467,3 +467,25 @@ def test_sheet_can_be_created_at_chosen_number(admin, appm):
         b = appm.db.session.get(appm.DisbursementBatch, bid2)
         assert b.number == 1 and b.deleted_at is None
     assert admin.get(f"/disbursement/{bid2}").status_code == 200
+
+
+def test_reused_number_on_old_database_shows_message_not_crash(admin, appm):
+    """If the number-reuse migration is not applied (old rule: number unique even among
+    deleted sheets), creating a sheet at a deleted sheet's number shows a message, not a 500."""
+    from sqlalchemy import text as sql
+    r = admin.post("/disbursement", data={"number": 77, "disb_date": "2026-11-23"})
+    bid = int(r.headers["Location"].rstrip("/").split("/")[-1])
+    admin.post(f"/disbursement/{bid}/delete", data={"reason": "Wrong number"})
+    with appm.app.app_context():
+        with appm.db.engine.begin() as c:
+            c.execute(sql("CREATE UNIQUE INDEX old_number_key ON disbursement_batch (number) WHERE number = 77"))
+    try:
+        r = admin.post("/disbursement", data={"number": 77, "disb_date": "2026-11-24"})
+        assert r.status_code == 302 and r.headers["Location"].rstrip("/").endswith("/disbursement")
+        with appm.app.app_context():
+            assert appm.DisbursementBatch.query.filter_by(number=77, deleted_at=None).count() == 0
+        assert admin.get("/disbursement").status_code == 200
+    finally:
+        with appm.app.app_context():
+            with appm.db.engine.begin() as c:
+                c.execute(sql("DROP INDEX old_number_key"))
