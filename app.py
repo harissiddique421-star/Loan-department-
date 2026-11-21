@@ -2022,7 +2022,17 @@ def disbursement_list():
         b = DisbursementBatch(number=number, disb_date=when, month=when.month, year=when.year,
                               created_by=current_user.id, notes=request.form.get("notes", "").strip() or None)
         db.session.add(b)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except IntegrityError:
+            # the database still has the old rule (number unique even among deleted sheets):
+            # migration 20261121000000_disbursement_number_reuse.sql has not been applied yet
+            db.session.rollback()
+            app.logger.warning("disbursement number %s blocked by a deleted sheet; "
+                               "apply migration 20261121000000_disbursement_number_reuse.sql", number)
+            flash(f"Disbursement number {number} abhi dobara istemal nahi ho sakta (purani deleted sheet). "
+                  f"Koi aur number chunein, ya admin database update (migration) apply karein.")
+            return redirect(url_for("disbursement_list"))
         audit("disbursement.created", entity="disbursement_batch", entity_id=b.id,
               new={"number": number, "date": when.isoformat()})
         db.session.commit()
