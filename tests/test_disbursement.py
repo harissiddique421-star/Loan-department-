@@ -444,3 +444,26 @@ def test_witness_family_member_cnic_is_optional(staff, appm):
     assert payload["cnic"][2]["front"] and payload["cnic"][2]["back"] is None
     staff.post(f"/application/{pk}/status", data={"status": "Submitted"})
     assert get_row(pk).status == "Submitted"
+
+
+def test_sheet_can_be_created_at_chosen_number(admin, appm):
+    """The user picks the sheet number; a deleted sheet's number can be used again."""
+    r = admin.post("/disbursement", data={"number": 1, "disb_date": "2026-11-23"})
+    assert r.status_code == 302
+    bid = int(r.headers["Location"].rstrip("/").split("/")[-1])
+    with appm.app.app_context():
+        assert appm.db.session.get(appm.DisbursementBatch, bid).number == 1
+    # the same number twice is refused while the first sheet is live
+    admin.post("/disbursement", data={"number": 1, "disb_date": "2026-11-24"})
+    with appm.app.app_context():
+        assert appm.DisbursementBatch.query.filter_by(number=1, deleted_at=None).count() == 1
+    # once deleted, number 1 is free again
+    admin.post(f"/disbursement/{bid}/delete", data={"reason": "Wrong number"})
+    r = admin.post("/disbursement", data={"number": 1, "disb_date": "2026-11-25"})
+    assert r.status_code == 302
+    bid2 = int(r.headers["Location"].rstrip("/").split("/")[-1])
+    assert bid2 != bid
+    with appm.app.app_context():
+        b = appm.db.session.get(appm.DisbursementBatch, bid2)
+        assert b.number == 1 and b.deleted_at is None
+    assert admin.get(f"/disbursement/{bid2}").status_code == 200

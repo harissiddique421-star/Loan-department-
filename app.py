@@ -420,8 +420,12 @@ class ReviewNote(db.Model):
 
 class DisbursementBatch(db.Model):
     __tablename__ = "disbursement_batch"
+    # a sheet number is unique among live sheets only: a deleted sheet frees its number
+    __table_args__ = (db.Index("disbursement_batch_number_live", "number", unique=True,
+                               sqlite_where=db.text("deleted_at IS NULL"),
+                               postgresql_where=db.text("deleted_at IS NULL")),)
     id = db.Column(db.Integer, primary_key=True)
-    number = db.Column(db.Integer, unique=True, nullable=False)
+    number = db.Column(db.Integer, nullable=False)
     disb_date = db.Column(db.Date, nullable=False)
     month = db.Column(db.Integer, nullable=False)
     year = db.Column(db.Integer, nullable=False)
@@ -2009,8 +2013,11 @@ def disbursement_list():
         except ValueError:
             flash("Disbursement number aur date sahih likhein.")
             return redirect(url_for("disbursement_list"))
-        if number <= 0 or DisbursementBatch.query.filter_by(number=number).first():
-            flash(f"Disbursement number {number} pehle se mojood hai ya ghalat hai.")
+        if number <= 0:
+            flash("Disbursement number 1 ya us se bara hona chahiye.")
+            return redirect(url_for("disbursement_list"))
+        if DisbursementBatch.query.filter_by(number=number, deleted_at=None).first():
+            flash(f"Disbursement number {number} ki sheet pehle se mojood hai. Koi aur number chunein.")
             return redirect(url_for("disbursement_list"))
         b = DisbursementBatch(number=number, disb_date=when, month=when.month, year=when.year,
                               created_by=current_user.id, notes=request.form.get("notes", "").strip() or None)
@@ -2027,9 +2034,9 @@ def disbursement_list():
         .filter(DisbursementEntry.removed_at.is_(None), DisbursementEntry.batch_id.in_([b.id for b in batches] or [-1]))
         .group_by(DisbursementEntry.batch_id))
     summary = {b.id: sums.get(b.id, (0, 0)) for b in batches}
-    last = db.session.query(db.func.max(DisbursementBatch.number)).scalar()
+    last = max((b.number for b in batches), default=0)
     return render_template("disbursement_list.html", batches=batches, summary=summary,
-                           next_number=(last + 1) if last else "", today=datetime.utcnow().date().isoformat(),
+                           next_number=last + 1, today=datetime.utcnow().date().isoformat(),
                            ready=eligible_count() if can("disbursement.manage") else 0)
 
 
