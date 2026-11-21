@@ -30,6 +30,7 @@
       <div class="title-line"><h1>{{ a.applicant_name or 'New applicant' }}</h1><span class="badge {{ a.status|slug }}">{{ a.status }}</span></div>
       <div class="meta"><span class="appid">{{ a.app_id }}</span>{% if a.loan_number %} · Loan No. <b>{{ a.loan_number }}</b>{% endif %} · Created {{ a.created_at.strftime('%d %b %Y, %H:%M') if a.created_at }} by {{ names.get(a.created_by, '?') }}{% if a.updated_by %} · Last updated {{ a.updated_at.strftime('%d %b %Y, %H:%M') if a.updated_at }} by {{ names.get(a.updated_by, '?') }}{% endif %}
         {% if a.reviewer_id %} · Reviewer: <b>{{ names.get(a.reviewer_id, '?') }}</b>{% endif %}</div>
+      {% if a.forwarded_at %}<div class="warnbox">{{ icon('check') }} Reviewer <b>{{ names.get(a.forwarded_by, '?') }}</b> ne {{ a.forwarded_at.strftime('%d %b %Y, %H:%M') }} ko ye application Admin{% if a.forwarded_to %} (<b>{{ names.get(a.forwarded_to, '?') }}</b>){% endif %} ko forward ki — Admin ka faisla baqi hai.</div>{% endif %}
       {% if current_user.role == 'Reviewer' and a.reviewer_id != current_user.id %}<div class="warnbox">Ye application aapko assigned nahi.</div>{% endif %}
       {% if a.status == 'Rejected' and a.rejection_reason %}<div class="warnbox">Rejection reason: {{ a.rejection_reason }}</div>{% endif %}
       <div class="facts">
@@ -55,6 +56,21 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input name="loan_number" value="{{ a.loan_number or '' }}" placeholder="Loan No." aria-label="Loan number" maxlength="30" style="width:130px">
           <button class="btn small light">{{ icon('check') }} Save Loan No.</button>
+        </form>
+        {% endif %}
+        {% if staff_assign and not can('app.assign') %}
+        <form method="post" action="{{ url_for('staff_assign_reviewer', app_id=a.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select name="reviewer_id" aria-label="Reviewer" required><option value="">Reviewer chunein…</option>{% for u in only_reviewers %}<option value="{{ u.id }}" {{ 'selected' if a.reviewer_id == u.id }}>{{ u.display }}</option>{% endfor %}</select>
+          <button class="btn small light">{{ icon('users') }} {{ 'Reviewer badlein' if a.reviewer_id else 'Reviewer ko bhejein' }}</button>
+        </form>
+        {% endif %}
+        {% if forward %}
+        <form method="post" action="{{ url_for('forward_to_admin', app_id=a.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select name="admin_id" aria-label="Admin"><option value="">Koi bhi Admin</option>{% for u in admins %}<option value="{{ u.id }}" {{ 'selected' if a.forwarded_to == u.id }}>Admin: {{ u.display }}</option>{% endfor %}</select>
+          <input class="reason" name="note" placeholder="Admin ke liye note / recommendation (optional)" aria-label="Note" maxlength="2000">
+          <button class="btn small">{{ icon('check') }} {{ 'Dobara Admin ko bhejein' if a.forwarded_at else 'Admin ko forward karein' }}</button>
         </form>
         {% endif %}
         {% if can('app.assign') %}
