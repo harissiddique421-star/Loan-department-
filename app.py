@@ -106,6 +106,8 @@ PERMISSIONS = {
     "app.review": "Assigned application review karna, notes, correction request",
     "app.decide": "Assigned application approve / reject karna",
     "app.assign": "Staff / reviewer assign karna",
+    "app.assign_reviewer": "Apni submit ki hui application khud Reviewer ko assign karna",
+    "app.forward": "Assigned application review ke baad Admin ko forward karna",
     "app.delete": "Application delete karna (soft delete, restore ho sakti hai)",
     "app.restore": "Deleted applications dekhna aur restore karna",
     "doc.upload": "Documents / photos upload aur replace karna",
@@ -142,9 +144,13 @@ PORTAL_INFO = {
 }
 # Same defaults as the Phase 3 migration (tests check they match).
 DEFAULT_ROLE_PERMS = {
-    "Staff": {"app.create", "app.edit_own", "app.view_all", "app.submit", "doc.upload"},
-    "Reviewer": {"app.review", "app.decide", "cheque.manage"},
+    "Staff": {"app.create", "app.edit_own", "app.view_all", "app.submit", "doc.upload", "app.assign_reviewer"},
+    "Reviewer": {"app.review", "app.decide", "cheque.manage", "app.forward"},
 }
+# Staff may pick the reviewer only until the review starts; a reviewer may forward to Admin
+# from these statuses (the application moves to In Review if it is not there yet).
+STAFF_ASSIGN_STATUSES = {"Submitted", "Submitted Again", "Pending Review"}
+FORWARD_STATUSES = {"Submitted", "Submitted Again", "Pending Review", "In Review"}
 DEFAULT_TRANSITIONS = [
     ("Draft", "Submitted", "app.submit"),
     ("Submitted", "Pending Review", "app.assign"),
@@ -175,6 +181,8 @@ ACTION_LABELS = {
     "application.edited": "Form edit kiya",
     "application.status": "Status badla",
     "application.assigned": "Assignment badli",
+    "application.reviewer_by_staff": "Staff ne reviewer assign kiya",
+    "application.forwarded": "Reviewer ne Admin ko forward ki",
     "application.loan_number": "Loan number set kiya",
     "application.deleted": "Application delete ki",
     "application.restored": "Application restore ki",
@@ -290,6 +298,9 @@ class Application(db.Model):
     deleted_at = db.Column(db.DateTime)
     deleted_by = db.Column(db.Integer, db.ForeignKey("user.id"))
     version = db.Column(db.Integer, default=1, nullable=False)
+    forwarded_to = db.Column(db.Integer, db.ForeignKey("user.id"))   # None + forwarded_at = any Admin
+    forwarded_by = db.Column(db.Integer, db.ForeignKey("user.id"))
+    forwarded_at = db.Column(db.DateTime)
 
     @property
     def data(self):
@@ -1046,7 +1057,10 @@ def admin_dashboard():
              .order_by(Application.updated_at.desc()).limit(20).all())
     recent_audit = AuditLog.query.order_by(AuditLog.id.desc()).limit(12).all()
     recent = base.order_by(Application.updated_at.desc()).limit(8).all()
-    return render_template("admin_dashboard.html", counts=counts, total=total, queue=queue,
+    forwarded = (base.filter(Application.forwarded_at.isnot(None),
+                             or_(Application.forwarded_to.is_(None), Application.forwarded_to == current_user.id))
+                 .order_by(Application.forwarded_at).limit(50).all())
+    return render_template("admin_dashboard.html", counts=counts, total=total, queue=queue, forwarded=forwarded,
                            users_by_role=users_by_role, recent_audit=recent_audit, recent=recent,
                            names=usernames())
 
@@ -1112,8 +1126,11 @@ def staff_dashboard():
              "approved": sum(by_status[x] for x in done),
              "rejected": by_status["Rejected"]}
     recent = base.order_by(Application.updated_at.desc()).limit(10).all()
+    to_assign = (base.filter(Application.status.in_(["Submitted", "Submitted Again"]),
+                             Application.reviewer_id.is_(None)).order_by(Application.updated_at).all()
+                 if can("app.assign_reviewer") else [])
     return render_template("staff_dashboard.html", corrections=corrections, open_notes=open_notes,
-                           drafts=drafts, stats=stats, recent=recent, names=usernames())
+                           drafts=drafts, stats=stats, recent=recent, names=usernames(), to_assign=to_assign)
 
 
 @app.route("/staff/applications")
@@ -1165,6 +1182,9 @@ def view_application(app_id):
     return render_template("application.html", a=a, docs=docs, history=history_for(a), notes=notes,
                            staff=[u for u in active if u.role in ("Staff", "Admin")],
                            reviewers=[u for u in active if u.role in ("Reviewer", "Admin")],
+                           only_reviewers=[u for u in active if u.role == "Reviewer"],
+                           admins=[u for u in active if u.role == "Admin"],
+                           staff_assign=can_staff_assign(a), forward=can_forward(a),
                            names=usernames(), transitions=allowed_transitions(a),
                            editable=can_edit_form(a),
                            can_note=can("app.review") and (current_user.role == "Admin"
@@ -1418,6 +1438,8 @@ def update_status(app_id):
             n.resolved_at, n.resolved_by = now, current_user.id
     if s == "Approved":
         a.approved_by, a.approved_at = current_user.id, now
+    if a.forwarded_at:      # Admin (or the reviewer) has acted on it; the audit log keeps the hand-off
+        a.forwarded_to = a.forwarded_by = a.forwarded_at = None
     a.status, a.updated_by, a.updated_at = s, current_user.id, now
     audit("application.status", a, reason=reason or None, old={"status": old}, new={"status": s})
     db.session.commit()
@@ -1449,6 +1471,73 @@ def assign_application(app_id):
         audit("application.assigned", a, old=old, new=new)
         db.session.commit()
         flash("Assignment update ho gayi.")
+    return redirect(url_for("view_application", app_id=a.id))
+
+
+def can_staff_assign(a):
+    """Staff picks the reviewer for their own submitted application (before the review starts)."""
+    return (not a.deleted_at and can("app.assign_reviewer") and is_owner(a)
+            and a.status in STAFF_ASSIGN_STATUSES)
+
+
+@app.route("/application/<int:app_id>/send-to-reviewer", methods=["POST"])
+@requires("app.assign_reviewer")
+def staff_assign_reviewer(app_id):
+    a = get_app(app_id)
+    if not can_staff_assign(a):
+        abort(403)
+    rid = request.form.get("reviewer_id", "")
+    r = User.query.filter(User.id == int(rid), User.role == "Reviewer", User.active.is_(True),
+                          User.deleted_at.is_(None)).first() if rid.isdigit() else None
+    if r is None:
+        flash("Reviewer chunein.")
+        return redirect(url_for("view_application", app_id=a.id))
+    old = {"reviewer_id": a.reviewer_id, "status": a.status}
+    if old["reviewer_id"] == r.id:
+        return redirect(url_for("view_application", app_id=a.id))
+    if USING_SQLITE:
+        if a.status in ("Submitted", "Submitted Again"):
+            a.status = "Pending Review"
+        a.reviewer_id, a.updated_by, a.updated_at = r.id, current_user.id, datetime.utcnow()
+    else:
+        # RLS does not let Staff update a submitted application; this database function checks
+        # the same rules and makes only this change.
+        db.session.execute(text("select staff_assign_reviewer(:a, :r)"), {"a": a.id, "r": r.id})
+        db.session.expire(a)
+    audit("application.reviewer_by_staff", a, old=old, new={"reviewer_id": r.id, "status": a.status})
+    db.session.commit()
+    flash(f"Application {r.display} (Reviewer) ko bhej di gayi.")
+    return redirect(url_for("view_application", app_id=a.id))
+
+
+def can_forward(a):
+    """The assigned reviewer sends the application on to Admin for the decision."""
+    return (not a.deleted_at and current_user.role != "Admin" and can("app.forward") and can("app.review")
+            and a.reviewer_id == current_user.id and a.status in FORWARD_STATUSES)
+
+
+@app.route("/application/<int:app_id>/forward", methods=["POST"])
+@requires("app.forward")
+def forward_to_admin(app_id):
+    a = get_app(app_id)
+    if not can_forward(a):
+        abort(403)
+    to = request.form.get("admin_id", "")
+    admin = User.query.filter(User.id == int(to), User.role == "Admin", User.active.is_(True),
+                              User.deleted_at.is_(None)).first() if to.isdigit() else None
+    note = request.form.get("note", "").strip()[:2000]
+    now = datetime.utcnow()
+    old = {"status": a.status, "forwarded_to": a.forwarded_to, "forwarded_at": bool(a.forwarded_at)}
+    if a.status != "In Review":
+        a.status = "In Review"
+    a.forwarded_to, a.forwarded_by, a.forwarded_at = (admin.id if admin else None), current_user.id, now
+    a.updated_by, a.updated_at = current_user.id, now
+    if note:
+        db.session.add(ReviewNote(application_id=a.id, author_id=current_user.id, kind="recommend", body=note))
+    audit("application.forwarded", a, reason=note or None, old=old,
+          new={"status": a.status, "forwarded_to": a.forwarded_to, "forwarded_at": True})
+    db.session.commit()
+    flash("Application Admin ko forward ho gayi" + (f" ({admin.display})." if admin else "."))
     return redirect(url_for("view_application", app_id=a.id))
 
 
@@ -3273,7 +3362,8 @@ def archive_after_change(app_pk):
 
 
 ARCHIVE_TRIGGERS = {"loan_form", "update_status", "upload", "save_details", "set_family_cnic", "add_note",
-                    "set_loan_number", "assign_application", "delete_document", "delete_application",
+                    "set_loan_number", "assign_application", "staff_assign_reviewer", "forward_to_admin",
+                    "delete_document", "delete_application",
                     "restore_application"}
 
 
@@ -4305,7 +4395,8 @@ with app.app_context():
         MIGRATION_PENDING = not all(_insp.has_table(t) for t in (
             "audit_log", "role_permission", "disbursement_batch", "disbursement_entry", "cheque",
             "gsheet_year", "gsheet_sync", "gsheet_sync_log")) or not any(
-            c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch"))
+            c["name"] == "deleted_at" for c in _insp.get_columns("disbursement_batch")) or not any(
+            c["name"] == "forwarded_at" for c in _insp.get_columns("application"))
         # Performance migration (20261107…) is optional: without it the app keeps the old
         # (slower) search and simply does not cache.
         # Drive archive migration (20261117…) is optional too: without it the archive stays off.

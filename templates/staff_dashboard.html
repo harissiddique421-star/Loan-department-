@@ -25,6 +25,15 @@
   {% endfor %}</ul>
 </section>
 {% endif %}
+{% if to_assign %}
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('users') }} Reviewer ko bhejni hain</h2><span class="muted">{{ to_assign|length }}</span></div>
+  <ul class="mini">{% for a in to_assign %}
+    <li><span><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.applicant_name or 'New applicant' }}</b></a><span class="sub">{{ a.app_id }} · {{ a.status }}</span></span>
+      <a class="btn small light" href="{{ url_for('view_application', app_id=a.id) }}">Reviewer chunein</a></li>
+  {% endfor %}</ul>
+</section>
+{% endif %}
 <div class="card pad-0 rise" style="--i:3">
   <div class="card-head" style="padding:16px 20px 0"><h2>{{ icon('file') }} Drafts</h2></div>
   {{ app_table(drafts, names, 'Koi draft nahi', 'Upar "New Application" se nayi application shuru karein.') }}

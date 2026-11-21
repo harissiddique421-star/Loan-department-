@@ -15,6 +15,16 @@
   {% endfor %}
 </div>
 
+{% if forwarded %}
+<section class="card rise" style="--i:2">
+  <div class="card-head"><h2>{{ icon('check') }} Reviewer ne faisle ke liye bheji</h2><span class="muted">{{ forwarded|length }}</span></div>
+  <ul class="mini">{% for a in forwarded %}
+    <li><span><a href="{{ url_for('view_application', app_id=a.id) }}"><b>{{ a.applicant_name or 'New applicant' }}</b></a><span class="sub">{{ a.app_id }} · {{ a.status }} · {{ names.get(a.forwarded_by, '?') }} · {{ a.forwarded_at.strftime('%d %b %Y, %H:%M') }}</span></span>
+      <a class="btn small" href="{{ url_for('view_application', app_id=a.id) }}">Dekhein</a></li>
+  {% endfor %}</ul>
+</section>
+{% endif %}
+
 <div class="two">
   <section class="card rise" style="--i:2">
     <div class="card-head"><h2>{{ icon('users') }} Assign karna hai</h2><span class="muted">{{ queue|length }}</span></div>
